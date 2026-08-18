@@ -92,6 +92,14 @@ export function compute(t: Trip, s: Settings): Computed {
   const net = amount - commission - gas;
   const grossPerKm = dist ? amount / dist : 0;
   const netPerKm = dist ? net / dist : 0;
+  // Час: подача (якщо відома) + пробіг + порожняк назад, за середньою швидкістю,
+  // плюс фікс. накладні на замовлення (пошук/чекання/передача/оплата).
+  const speed = s.time_model?.avg_speed_kmh ?? 24;
+  const overhead = s.time_model?.order_overhead_min ?? 4;
+  const pickup = Number(t.pickup_km ?? 0);
+  const movingKm = pickup + dist * (1 + emptyCoef(t, s));
+  const timeMin = overhead + (movingKm / speed) * 60;
+  const netPerHour = timeMin > 0 ? net / (timeMin / 60) : 0;
   const rating: "OK" | "погана" =
     netPerKm >= s.threshold_net_per_km ? "OK" : "погана";
   const marginal = s.marginal_net_per_km ?? 10;
@@ -103,7 +111,7 @@ export function compute(t: Trip, s: Settings): Computed {
         : "пропускай";
   // Дальняк визначаємо за призначенням (to); список — settings.long_haul_areas.
   const longHaul = inArea(t.to, s.long_haul_areas ?? []);
-  return { gas, commission, net, grossPerKm, netPerKm, rating, rec, longHaul };
+  return { gas, commission, net, grossPerKm, netPerKm, timeMin, netPerHour, rating, rec, longHaul };
 }
 
 export function enrich(data: Data): Row[] {

@@ -15,12 +15,15 @@ function block(name: string, sub: Row[]): void {
   const km = sub.reduce((a, r) => a + r.distance, 0);
   const net = sub.reduce((a, r) => a + r.net, 0);
   const npk = km ? net / km : 0;
+  const mins = sub.reduce((a, r) => a + r.timeMin, 0);
+  const nph = mins ? net / (mins / 60) : 0;
   const bad = sub.filter((r) => r.netPerKm < thr).length;
   console.log(
     `${name.padEnd(22)} | n=${String(n).padStart(2)} | ` +
       `виручка=${String(Math.round(amt)).padStart(5)} | ` +
       `чист=${String(Math.round(net)).padStart(6)} | ` +
       `чист/км=${npk.toFixed(1).padStart(5)} | ` +
+      `₴/год=${String(Math.round(nph)).padStart(4)} | ` +
       `нижче порогу=${String(bad).padStart(2)} (${String(Math.round((bad / n) * 100)).padStart(3)}%)`,
   );
 }

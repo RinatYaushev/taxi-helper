@@ -45,6 +45,12 @@ export interface Settings {
   commission_cashless_pct: number;
   threshold_net_per_km: number;
   marginal_net_per_km: number;
+  /** Модель часу для метрики ₴/год. Час = order_overhead_min +
+   *  (подача + пробіг + порожняк назад)/avg_speed_kmh. Крутилки, тюняться. */
+  time_model?: {
+    avg_speed_kmh: number;
+    order_overhead_min: number;
+  };
   modes: Mode[];
   dead_end_areas: string[];
   live_areas: string[];
@@ -77,6 +83,10 @@ export interface Computed {
   net: number;
   grossPerKm: number;
   netPerKm: number;
+  /** Оцінка тривалості замовлення (хв): подача + пробіг + порожняк назад + накладні. */
+  timeMin: number;
+  /** Чистими за годину — головна метрика для водія (час дорожчий за газ на ГБО). */
+  netPerHour: number;
   rating: "OK" | "погана";
   rec: Recommendation;
   /** Призначення в межах дальняку (long_haul_areas) — міжміський, окрема логіка. */
