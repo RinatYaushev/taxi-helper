@@ -30,17 +30,24 @@
 ## Ключові команди
 
 ```bash
-python3 generate.py     # data.json -> YYYY-MM-DD-result.xlsx
-python3 analyze.py      # per-trip грн/км, чист/км
-python3 report.py       # зведення по дистанції/зоні/годині/оплаті
+npm install             # залежності (exceljs, jimp)
+npm run generate        # data.json -> YYYY-MM-DD-result.xlsx
+npm run analyze         # per-trip грн/км, чист/км
+npm run report          # зведення по дистанції/зоні/годині/оплаті
+npm run update-pay      # оновлення payment за кольором іконки
 ./pipeline.sh [dir]     # повний конвеєр обробки скрінів (default ~/Desktop/screens)
 ```
+
+> Стек: **TypeScript на Node.js 22+** (запуск напряму, без збірки — Node сам стрипає
+> типи). Пиши **erasable** TS: без `enum`/`namespace`/parameter-properties.
+> Локальні імпорти — з розширенням `.ts` (`import ... from "./lib.ts"`).
 
 ## Обробка скріншотів замовлень (macOS)
 
 1. `swift ocr.swift <dir>` → текст (адреси, `сума ₴`, `відстань км`, `DD серп. HH:MM`).
 2. `swift ocr_boxes.swift <dir>` → ті ж рядки з нормалізованими bounding-box (origin — низ-ліво).
-3. `update_pay.py` → визначає **тип оплати за кольором іконки** ліворуч від суми:
+3. `npm run update-pay` (`src/updatePay.ts`) → визначає **тип оплати за кольором іконки**
+   ліворуч від суми:
    - 🟡 жовтий (H≈38–62°) → **Готівка**
    - 🟢 зелений (H≈90–165°) → **Комбінована** (гаманець: частина готівка + частина на баланс)
    - 🔵 синій (H≈190–255°) → **Безготівка**
@@ -49,20 +56,20 @@ python3 report.py       # зведення по дистанції/зоні/го
 ### Як додавати НОВІ поїздки зі скрінів
 Наразі напівавтоматично: агент читає `/tmp/ocr.txt`, витягує `datetime/amount/distance/from/to`,
 визначає `zone` за призначенням, і **вручну** дописує об'єкти в `trips`. Тип оплати потім
-проставляє `update_pay.py`. Дублікати перевіряти за `datetime` (+ адресами).
+проставляє `src/updatePay.ts`. Дублікати перевіряти за `datetime` (+ адресами).
 
-## Формули (мають збігатися з `generate.py::compute`)
+## Формули (єдине джерело — `src/lib.ts::compute`)
 ```
-fuel_per_km = gas_consumption_l_100km/100 * gas_price_per_l
-gas         = distance * (1 + empty_run_coef) * fuel_per_km
-commission  = amount * commission_uklon_pct/100  (+ commission_cashless_pct% якщо Безготівка)
-net         = amount - commission - gas
-net_per_km  = net / distance
+fuelPerKm  = gas_consumption_l_100km/100 * gas_price_per_l
+gas        = distance * (1 + empty_run_coef) * fuelPerKm
+commission = amount * commission_uklon_pct/100  (+ commission_cashless_pct% якщо Безготівка)
+net        = amount - commission - gas
+netPerKm   = net / distance
 ```
-Рекомендація: `net_per_km ≥ threshold_net_per_km` → **бери**; `≥ marginal_net_per_km` → **думай**; інакше **пропускай**.
+Рекомендація: `netPerKm ≥ threshold_net_per_km` → **бери**; `≥ marginal_net_per_km` → **думай**; інакше **пропускай**.
 
-**Золоте правило** (мін. валова ціна): `min_gross = (threshold + breakeven) / (1 - commission)`, де
-`breakeven = fuel_per_km*(1+empty_run_coef)`. Наразі ≈ **28 грн/км**.
+**Золоте правило** (мін. валова ціна): `minGross = (threshold + breakeven) / (1 - commission)`, де
+`breakeven = fuelPerKm*(1+empty_run_coef)`. Наразі ≈ **28 грн/км**.
 
 ## Доменні висновки (перевірені на даних)
 - Прибутковість **обернено залежить від дистанції**: поїздки 12+ км майже завжди збиткові.
@@ -74,11 +81,11 @@ net_per_km  = net / distance
 - Мова спілкування й коментарів — **українська**.
 - Числа: відстань `км` з 2 знаками, суми `грн`.
 - Дата/час у `datetime`: `DD.MM HH:MM` (місяць — серпень `.08`).
-- Не коммітити `*.xlsx`, `.DS_Store`, `.idea/` (див. `.gitignore`).
-- Скрипти мають лишатися ідемпотентними: `generate.py`/`update_pay.py` можна запускати повторно.
-- При зміні формул синхронізувати `generate.py`, `analyze.py`, `report.py`.
+- Не коммітити `*.xlsx`, `node_modules/`, `.DS_Store`, `.idea/` (див. `.gitignore`).
+- Скрипти мають лишатися ідемпотентними: `generate`/`update-pay` можна запускати повторно.
+- Формули живуть **в одному місці** — `src/lib.ts`. `generate/analyze/report` імпортують `compute` звідти.
 
 ## Обмеження
-- OCR/детекція оплати — лише **macOS** (Apple Vision + Pillow).
-- `update_pay.py` зіставляє скрін↔поїздку **за датою/часом**; нові поїздки треба додати заздалегідь.
+- OCR/детекція оплати — лише **macOS** (Apple Vision + jimp).
+- `src/updatePay.ts` зіставляє скрін↔поїздку **за датою/часом**; нові поїздки треба додати заздалегідь.
 

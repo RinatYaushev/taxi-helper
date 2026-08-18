@@ -1,0 +1,21 @@
+{
+  "name": "taxi-helper",
+  "version": "1.0.0",
+  "description": "Калькулятор прибутковості поїздок у таксі Uklon (Вінниця)",
+  "type": "module",
+  "scripts": {
+    "generate": "node src/generate.ts",
+    "analyze": "node src/analyze.ts",
+    "report": "node src/report.ts",
+    "update-pay": "node src/updatePay.ts"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "jimp": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
+

@@ -12,9 +12,8 @@
 #   ./pipeline.sh [шлях_до_папки_зі_скрінами]
 # За замовчуванням: ~/Desktop/screens
 #
-# УВАГА: OCR і update_pay.py лише ОНОВЛЮЮТЬ payment для вже наявних поїздок
-# за збігом дати/часу. Нові поїздки в data.json додаються вручну (або окремим
-# кроком) — див. README.
+# УВАГА: OCR і updatePay лише ОНОВЛЮЮТЬ payment для вже наявних поїздок
+# за збігом дати/часу. Нові поїздки в data.json додаються вручну — див. README.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -33,11 +32,11 @@ echo "▶ 2/5 OCR координат…"
 swift ocr_boxes.swift "$SCREENS" > /tmp/boxes.tsv
 
 echo "▶ 3/5 Визначення типу оплати за кольором іконки…"
-python3 update_pay.py
+node src/updatePay.ts "$SCREENS"
 
 echo "▶ 4/5 Генерація Excel…"
-python3 generate.py
+node src/generate.ts
 
 echo "▶ 5/5 Аналіз:"
-python3 report.py
+node src/report.ts
 

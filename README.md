@@ -24,12 +24,12 @@
 ## Встановлення
 
 ```bash
-python3 -m pip install -r requirements.txt
+npm install
 ```
 
-- Python 3.9+
-- [openpyxl](https://openpyxl.readthedocs.io/) — генерація Excel
-- [Pillow](https://python-pillow.org/) — аналіз кольору іконки оплати
+- Node.js **22+** (запускає TypeScript напряму, без збірки)
+- [exceljs](https://github.com/exceljs/exceljs) — генерація Excel
+- [jimp](https://github.com/jimp-dev/jimp) — аналіз кольору іконки оплати (чистий JS)
 - **Swift** (macOS, вбудований) — OCR через Apple Vision (лише для обробки скрінів)
 
 ---
@@ -39,15 +39,15 @@ python3 -m pip install -r requirements.txt
 ### 1. Згенерувати Excel-калькулятор з поточних даних
 
 ```bash
-python3 generate.py                 # data.json -> YYYY-MM-DD-result.xlsx
-python3 generate.py my.json out.xlsx
+npm run generate                    # data.json -> YYYY-MM-DD-result.xlsx
+node src/generate.ts my.json out.xlsx
 ```
 
 ### 2. Швидкий аналіз у консолі
 
 ```bash
-python3 analyze.py    # грн/км і чист/км по кожній поїздці
-python3 report.py     # зведення по дистанції / зоні / годині / оплаті
+npm run analyze    # грн/км і чист/км по кожній поїздці
+npm run report     # зведення по дистанції / зоні / годині / оплаті
 ```
 
 ### 3. Обробити нові скріншоти (macOS)
@@ -61,7 +61,7 @@ python3 report.py     # зведення по дистанції / зоні / г
 Конвеєр зробить OCR, визначить тип оплати за кольором іконки, оновить `data.json`,
 згенерує Excel і виведе аналіз.
 
-> ⚠️ `update_pay.py` **оновлює** тип оплати для вже наявних поїздок (за збігом
+> ⚠️ `npm run update-pay` **оновлює** тип оплати для вже наявних поїздок (за збігом
 > дати/часу). Самі поїздки наразі додаються в `data.json` вручну на основі OCR-тексту
 > (`/tmp/ocr.txt`).
 
@@ -124,16 +124,18 @@ python3 report.py     # зведення по дистанції / зоні / г
 | Файл | Призначення |
 |---|---|
 | `data.json` | усі дані: налаштування + поїздки |
-| `generate.py` | генератор Excel-калькулятора |
-| `analyze.py` | швидкий per-trip аналіз у консоль |
-| `report.py` | категоризований звіт |
+| `src/types.ts` | типи (Trip, Settings, …) |
+| `src/lib.ts` | спільні формули (`compute`, беззбитковість, золоте правило) |
+| `src/generate.ts` | генератор Excel-калькулятора (exceljs) |
+| `src/analyze.ts` | швидкий per-trip аналіз у консоль |
+| `src/report.ts` | категоризований звіт |
+| `src/detectPay.ts` | визначення типу оплати за кольором іконки (jimp) |
+| `src/updatePay.ts` | оновлення `payment` у `data.json` за скрінами |
 | `ocr.swift` | OCR тексту скрінів (Apple Vision) |
 | `ocr_boxes.swift` | OCR з координатами рядків |
-| `detect_pay.py` | визначення типу оплати за кольором іконки |
-| `update_pay.py` | оновлення `payment` у `data.json` за скрінами |
 | `pipeline.sh` | повний конвеєр обробки скрінів |
-| `requirements.txt` | Python-залежності |
+| `package.json` | залежності та npm-скрипти |
 | `AGENTS.md` | контекст і правила для AI-агентів |
 
-Згенеровані `*.xlsx` в git не потрапляють (`.gitignore`).
+Згенеровані `*.xlsx` та `node_modules/` в git не потрапляють (`.gitignore`).
 
