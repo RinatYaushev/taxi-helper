@@ -53,8 +53,8 @@ node src/generate.ts my.json out.html
 пропускай), пошуком, кнопкою **Завантажити → CSV / PDF**, зведенням по дистанції / зоні /
 годині / оплаті та списком найгірших поїздок.
 
-> 📄 Готовий приклад звіту лежить у [`examples/report.example.html`](./examples/report.example.html)
-> — можна відкрити без запуску генератора, щоб побачити, як усе виглядає.
+> 🌐 Не хочеш нічого запускати? Відкрий **живий звіт** —
+> https://rinatyaushev.github.io/taxi-helper/ (оновлюється автоматично з `main`).
 
 ### 2. Швидкий аналіз у консолі
 
@@ -150,7 +150,7 @@ npm run report     # зведення по дистанції / зоні / го�
 | `pipeline.sh` | повний конвеєр обробки скрінів |
 | `package.json` | залежності та npm-скрипти |
 | `AGENTS.md` | контекст і правила для AI-агентів |
-| `examples/` | приклад згенерованого HTML-звіту (`report.example.html`) |
+| `.github/workflows/pages.yml` | публікація звіту на GitHub Pages |
 
 Згенеровані `report.html`, `*.xlsx` та `node_modules/` в git не потрапляють (`.gitignore`).
 
