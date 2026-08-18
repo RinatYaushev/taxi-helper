@@ -17,7 +17,7 @@
 ## Архітектура даних
 
 Єдине джерело правди — **`data.json`** (`settings` + масив `trips`).
-Усе інше — генератори/аналізатори поверх нього. Excel — похідний артефакт (в git не коммітиться).
+Усе інше — генератори/аналізатори поверх нього. HTML-звіт — похідний артефакт (в git не коммітиться).
 
 Схема поїздки:
 ```json
@@ -30,8 +30,8 @@
 ## Ключові команди
 
 ```bash
-npm install             # залежності (exceljs, jimp)
-npm run generate        # data.json -> YYYY-MM-DD-result.xlsx
+npm install             # залежності (jimp)
+npm run generate        # data.json -> report.html (самодостатній HTML-звіт)
 npm run analyze         # per-trip грн/км, чист/км
 npm run report          # зведення по дистанції/зоні/годині/оплаті
 npm run update-pay      # оновлення payment за кольором іконки
@@ -81,7 +81,7 @@ netPerKm   = net / distance
 - Мова спілкування й коментарів — **українська**.
 - Числа: відстань `км` з 2 знаками, суми `грн`.
 - Дата/час у `datetime`: `DD.MM HH:MM` (місяць — серпень `.08`).
-- Не коммітити `*.xlsx`, `node_modules/`, `.DS_Store`, `.idea/` (див. `.gitignore`).
+- Не коммітити `report.html`, `*.xlsx`, `node_modules/`, `.DS_Store`, `.idea/` (див. `.gitignore`).
 - Скрипти мають лишатися ідемпотентними: `generate`/`update-pay` можна запускати повторно.
 - Формули живуть **в одному місці** — `src/lib.ts`. `generate/analyze/report` імпортують `compute` звідти.
 

@@ -1,316 +1,586 @@
-// Генератор Excel-калькулятора (аналог generate.py) через exceljs
-import ExcelJS from "exceljs";
+// Генератор гарного HTML-звіту (замість Excel)
+import { writeFileSync } from "node:fs";
 import {
   loadData,
-  compute,
+  enrich,
   fuelPerKm,
   breakeven,
   minGrossPerKm,
-  avg,
-  round,
+  groupStats,
 } from "./lib.ts";
-import type { Row } from "./types.ts";
+import type { Row, Settings } from "./types.ts";
 
-// ---------- стилі ----------
-type Fill = ExcelJS.Fill;
-const solid = (argb: string): Fill => ({
-  type: "pattern",
-  pattern: "solid",
-  fgColor: { argb },
-});
-const HDR = solid("FF2E5A88");
-const CFG = solid("FFFFF2CC");
-const GOOD = solid("FFC6EFCE");
-const BAD = solid("FFFFC7CE");
-const SUBH = solid("FFDDEBF7");
-const HDRF: Partial<ExcelJS.Font> = { color: { argb: "FFFFFFFF" }, bold: true };
-const TITLE: Partial<ExcelJS.Font> = { bold: true, size: 14, color: { argb: "FF2E5A88" } };
-const BOLD: Partial<ExcelJS.Font> = { bold: true };
-const thin: ExcelJS.Border = { style: "thin", color: { argb: "FFBBBBBB" } };
-const BORDER: Partial<ExcelJS.Borders> = { top: thin, left: thin, bottom: thin, right: thin };
-const CENTER: Partial<ExcelJS.Alignment> = { horizontal: "center", vertical: "middle" };
+const esc = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
+const money = (n: number): string => Math.round(n).toLocaleString("uk-UA");
+const f1 = (n: number): string => n.toFixed(1);
+const f2 = (n: number): string => n.toFixed(2);
 
-function todayName(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-result.xlsx`;
+function kpiCards(rows: Row[]): string {
+  const amount = rows.reduce((a, r) => a + r.amount, 0);
+  const gas = rows.reduce((a, r) => a + r.gas, 0);
+  const comm = rows.reduce((a, r) => a + r.commission, 0);
+  const net = rows.reduce((a, r) => a + r.net, 0);
+  const km = rows.reduce((a, r) => a + r.distance, 0);
+  const cards: [string, string, string][] = [
+    ["Поїздок", String(rows.length), ""],
+    ["Виручка", money(amount), "грн"],
+    ["Чистий прибуток", money(net), "грн"],
+    ["Чистий / км", f1(km ? net / km : 0), "грн/км"],
+    ["Газ", f1((gas / amount) * 100), "% виручки"],
+    ["Комісія", f1((comm / amount) * 100), "% виручки"],
+  ];
+  return cards
+    .map(
+      ([label, val, unit]) => `
+      <div class="card">
+        <div class="card-val">${val} <span class="card-unit">${unit}</span></div>
+        <div class="card-label">${label}</div>
+      </div>`,
+    )
+    .join("");
 }
 
-async function build(inPath: string, outPath: string): Promise<[number, number]> {
-  const data = loadData(inPath);
-  const s = data.settings;
-  const rows: Row[] = data.trips.map((t) => ({ ...t, ...compute(t, s) }));
-
-  const wb = new ExcelJS.Workbook();
-
-  // ---------------- Налаштування ----------------
-  const ws = wb.addWorksheet("Налаштування");
-  ws.getCell("A1").value = "Налаштування (джерело — data.json)";
-  ws.getCell("A1").font = TITLE;
-  const cfgRows: [string, string | number, string][] = [
-    ["Параметр", "Значення", "Одиниці / коментар"],
-    ["Витрата ГБО (газ)", s.gas_consumption_l_100km, "л/100 км"],
-    ["Ціна газу", s.gas_price_per_l, "грн/л"],
-    ["Коеф. порожнього пробігу", s.empty_run_coef, "частка порожняку від корисного км"],
-    ["Комісія Uklon", s.commission_uklon_pct, "%"],
-    ["Комісія за вивід безготівки", s.commission_cashless_pct, "%, лише для безготівки"],
-    ["Поріг 'хорошої' поїздки", s.threshold_net_per_km, "грн/км чистими"],
+function decisionStrip(rows: Row[]): string {
+  const recs: ["бери" | "думай" | "пропускай", string][] = [
+    ["бери", "good"],
+    ["думай", "warn"],
+    ["пропускай", "bad"],
   ];
-  cfgRows.forEach((r, i) => {
-    const row = i + 3;
-    ws.getCell(row, 1).value = r[0];
-    ws.getCell(row, 2).value = r[1];
-    ws.getCell(row, 3).value = r[2];
-    if (row === 3) {
-      for (let c = 1; c <= 3; c++) {
-        ws.getCell(row, c).fill = HDR;
-        ws.getCell(row, c).font = HDRF;
-      }
-    } else {
-      ws.getCell(row, 2).fill = CFG;
-      ws.getCell(row, 2).font = BOLD;
-    }
-    for (let c = 1; c <= 3; c++) ws.getCell(row, c).border = BORDER;
-  });
-  ws.getCell("A11").value = "Собівартість палива, грн/км";
-  ws.getCell("B11").value = round(fuelPerKm(s));
-  ws.getCell("A12").value = "Собівартість з порожняком, грн/км";
-  ws.getCell("B12").value = round(breakeven(s));
-  for (const r of [11, 12]) {
-    ws.getCell(r, 1).font = BOLD;
-    ws.getCell(r, 2).font = BOLD;
-  }
-  ws.getCell("A14").value =
-    "⚠ Ці значення генеруються з data.json. Прав JSON і перезапусти generate.";
-  ws.getCell("A14").font = { italic: true, color: { argb: "FFB00000" } };
-  ws.getColumn(1).width = 36;
-  ws.getColumn(2).width = 14;
-  ws.getColumn(3).width = 40;
+  const total = rows.length || 1;
+  const segments = recs
+    .map(([rec]) => {
+      const g = rows.filter((r) => r.rec === rec);
+      const pct = (g.length / total) * 100;
+      return `<div class="ds-seg ds-${rec}" style="width:${pct}%" title="${rec}: ${g.length}"></div>`;
+    })
+    .join("");
+  const legend = recs
+    .map(([rec, cls]) => {
+      const g = rows.filter((r) => r.rec === rec);
+      const net = g.reduce((a, r) => a + r.net, 0);
+      const km = g.reduce((a, r) => a + r.distance, 0);
+      return `<div class="ds-item">
+        <span class="ds-dot ds-dot-${rec}"></span>
+        <b>${rec}</b> · ${g.length} шт · ${Math.round((g.length / total) * 100)}%
+        <span class="ds-net v-${cls === "good" ? "ok" : cls === "warn" ? "mid" : "low"}">${money(net)} грн</span>
+        <span class="ds-km">${f1(km)} км</span>
+      </div>`;
+    })
+    .join("");
+  return `
+    <div class="panel">
+      <h3>Розподіл рішень</h3>
+      <div class="ds-bar">${segments}</div>
+      <div class="ds-legend">${legend}</div>
+    </div>`;
+}
 
-  // ---------------- Поїздки ----------------
-  const t = wb.addWorksheet("Поїздки");
-  const headers = [
-    "Дата/час", "Оплата", "Сума, грн", "Відстань, км", "Подача",
-    "Призначення", "Зона", "Газ, грн", "Комісія, грн", "Чистий, грн",
-    "грн/км", "Чистий грн/км", "Оцінка", "Рекоменд.",
-  ];
-  headers.forEach((h, j) => {
-    const cell = t.getCell(1, j + 1);
-    cell.value = h;
-    cell.fill = HDR;
-    cell.font = HDRF;
-    cell.alignment = CENTER;
-    cell.border = BORDER;
-  });
-  rows.forEach((r, i) => {
-    const row = i + 2;
-    const vals = [
-      r.datetime, r.payment, round(r.amount), round(r.distance), r.from,
-      r.to, r.zone, round(r.gas), round(r.commission), round(r.net),
-      round(r.grossPerKm), round(r.netPerKm), r.rating, r.rec,
-    ];
-    vals.forEach((v, j) => (t.getCell(row, j + 1).value = v));
-  });
-  const last = rows.length + 1;
-  for (let i = 2; i <= last; i++) {
-    for (let j = 1; j <= 14; j++) {
-      const cell = t.getCell(i, j);
-      cell.border = BORDER;
-      if ([2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14].includes(j)) cell.alignment = CENTER;
-      if ([3, 4, 8, 9, 10, 11, 12].includes(j)) cell.numFmt = "0.00";
-    }
-  }
-  if (last >= 2) {
-    t.addConditionalFormatting({
-      ref: `M2:M${last}`,
-      rules: [
-        { type: "cellIs", operator: "equal", formulae: ['"OK"'], style: { fill: GOOD }, priority: 1 },
-        { type: "cellIs", operator: "equal", formulae: ['"погана"'], style: { fill: BAD }, priority: 2 },
-      ],
-    });
-    t.addConditionalFormatting({
-      ref: `N2:N${last}`,
-      rules: [
-        { type: "cellIs", operator: "equal", formulae: ['"бери"'], style: { fill: GOOD }, priority: 1 },
-        { type: "cellIs", operator: "equal", formulae: ['"думай"'], style: { fill: CFG }, priority: 2 },
-        { type: "cellIs", operator: "equal", formulae: ['"пропускай"'], style: { fill: BAD }, priority: 3 },
-      ],
-    });
-  }
-  [13, 12, 10, 12, 30, 30, 12, 10, 11, 11, 9, 13, 10, 11].forEach(
-    (w, j) => (t.getColumn(j + 1).width = w),
+function insightsBox(rows: Row[], s: Settings): string {
+  const npk = (rs: Row[]): number => {
+    const km = rs.reduce((a, r) => a + r.distance, 0);
+    const net = rs.reduce((a, r) => a + r.net, 0);
+    return km ? net / km : 0;
+  };
+  const short = rows.filter((r) => r.distance < 7);
+  const long = rows.filter((r) => r.distance >= 12);
+  const city = rows.filter((r) => r.zone === "Місто");
+  const dead = rows.filter((r) => r.zone === "Глухий кут");
+  const cash = rows.filter((r) => r.payment === "Готівка");
+  const cashless = rows.filter((r) => r.payment === "Безготівка");
+  const belowThr = rows.filter((r) => r.netPerKm < s.threshold_net_per_km);
+  const lostNet = rows
+    .filter((r) => r.rec === "пропускай")
+    .reduce((a, r) => a + r.net, 0);
+
+  const hourOf = (r: Row) => Number(r.datetime.split(" ")[1].split(":")[0]);
+  const hb = (name: string, g: Row[]): [string, Row[]] => [name, g];
+  const hourBuckets: [string, Row[]][] = [
+    hb("до 17:00", rows.filter((r) => hourOf(r) < 17)),
+    hb("17–19", rows.filter((r) => hourOf(r) >= 17 && hourOf(r) < 19)),
+    hb("19–21", rows.filter((r) => hourOf(r) >= 19 && hourOf(r) < 21)),
+    hb("після 21", rows.filter((r) => hourOf(r) >= 21)),
+  ].filter(([, g]) => g.length);
+  const bestHour = [...hourBuckets].sort((a, b) => npk(b[1]) - npk(a[1]))[0];
+
+  const items: string[] = [];
+  items.push(
+    `📏 Короткі (&lt;7 км) дають <b class="v-ok">${f1(npk(short))}</b> грн/км, а довгі (12+ км) — <b class="v-low">${f1(npk(long))}</b> грн/км. Прибуток обернено залежить від дистанції.`,
   );
-  t.views = [{ state: "frozen", ySplit: 1 }];
+  items.push(
+    `🏘️ Місто: <b class="v-ok">${f1(npk(city))}</b> грн/км проти глухих кутів <b class="v-low">${f1(npk(dead))}</b> грн/км (${dead.length} поїздок у тупики).`,
+  );
+  items.push(
+    `💳 Готівка <b>${f1(npk(cash))}</b> vs безготівка <b>${f1(npk(cashless))}</b> грн/км — тип оплати майже не вирішує.`,
+  );
+  if (bestHour) {
+    items.push(
+      `⏰ Найкраща година: <b>${bestHour[0]}</b> — ${f1(npk(bestHour[1]))} грн/км.`,
+    );
+  }
+  items.push(
+    `⚠️ Нижче порогу (${s.threshold_net_per_km} грн/км): <b class="v-low">${belowThr.length}</b> з ${rows.length} (${Math.round((belowThr.length / (rows.length || 1)) * 100)}%). На «пропускай» злито <b class="v-low">${money(lostNet)} грн</b> чистого.`,
+  );
+  return `
+    <div class="panel">
+      <h3>💡 Авто-інсайти</h3>
+      <ul class="insights">${items.map((i) => `<li>${i}</li>`).join("")}</ul>
+    </div>`;
+}
 
-  // ---------------- Аналіз ----------------
-  const a = wb.addWorksheet("Аналіз");
-  a.getCell("A1").value = "Аналіз поїздок";
-  a.getCell("A1").font = TITLE;
-  const by = (pred: (r: Row) => boolean) => rows.filter(pred);
-  const totalAmount = rows.reduce((x, r) => x + r.amount, 0);
-  const totalGas = rows.reduce((x, r) => x + r.gas, 0);
-  const totalComm = rows.reduce((x, r) => x + r.commission, 0);
-  const totalNet = rows.reduce((x, r) => x + r.net, 0);
-  const totalKm = rows.reduce((x, r) => x + r.distance, 0);
-  const cash = by((r) => r.payment === "Готівка");
-  const cashless = by((r) => r.payment === "Безготівка");
-  const combo = by((r) => r.payment === "Комбінована");
-  const city = by((r) => r.zone === "Місто");
-  const dead = by((r) => r.zone === "Глухий кут");
-  const bad = by((r) => r.rating === "погана");
-  const ok = by((r) => r.rating === "OK");
-  const npk = (arr: Row[]) => round(avg(arr.map((r) => r.netPerKm)));
-
-  const blocks: [string, number | null][] = [
-    ["ЗАГАЛЬНЕ", null],
-    ["К-сть поїздок", rows.length],
-    ["Сума валова, грн", round(totalAmount)],
-    ["Комісія всього, грн", round(totalComm)],
-    ["Витрати на газ, грн", round(totalGas)],
-    ["ЧИСТИЙ прибуток, грн", round(totalNet)],
-    ["Пробіг клієнтів, км", round(totalKm)],
-    ["Середній ЧИСТИЙ грн/км", npk(rows)],
-    ["Чистий грн/км (загальний)", totalKm ? round(totalNet / totalKm) : 0],
-    ["Середній чистий за поїздку, грн", round(avg(rows.map((r) => r.net)))],
-    ["Частка газу у виручці, %", totalAmount ? round((totalGas / totalAmount) * 100, 1) : 0],
-    ["Частка комісії у виручці, %", totalAmount ? round((totalComm / totalAmount) * 100, 1) : 0],
-    ["", null],
-    ["ЗА ОПЛАТОЮ (сер. чистий грн/км)", null],
-    ["Готівка", npk(cash)],
-    ["Безготівка", npk(cashless)],
-    ["Комбінована", npk(combo)],
-    ["", null],
-    ["ЗА ЗОНОЮ", null],
-    ["Місто — к-сть", city.length],
-    ["Місто — сер. чистий грн/км", npk(city)],
-    ["Глухий кут — к-сть", dead.length],
-    ["Глухий кут — сер. чистий грн/км", npk(dead)],
-    ["", null],
-    ["ЯКІСТЬ ПОТОКУ", null],
-    ["OK поїздок", ok.length],
-    ["Поганих (нижче порогу)", bad.length],
-    ["Частка поганих, %", rows.length ? round((bad.length / rows.length) * 100, 1) : 0],
-  ];
-  blocks.forEach(([label, value], i) => {
-    const row = i + 3;
-    a.getCell(row, 1).value = label;
-    if (value === null) {
-      a.getCell(row, 1).font = BOLD;
-      a.getCell(row, 1).fill = SUBH;
-    } else {
-      a.getCell(row, 2).value = value;
-      a.getCell(row, 2).font = BOLD;
-    }
+function dailyTrend(rows: Row[]): string {
+  const byDay = new Map<string, Row[]>();
+  for (const r of rows) {
+    const day = r.datetime.split(" ")[0];
+    (byDay.get(day) ?? byDay.set(day, []).get(day)!).push(r);
+  }
+  const days = [...byDay.entries()].sort((a, b) => {
+    const [ad, am] = a[0].split(".").map(Number);
+    const [bd, bm] = b[0].split(".").map(Number);
+    return am - bm || ad - bd;
   });
-  a.getColumn(1).width = 34;
-  a.getColumn(2).width = 14;
+  const maxNet = Math.max(...days.map(([, g]) => g.reduce((a, r) => a + r.net, 0)), 1);
+  const bars = days
+    .map(([day, g]) => {
+      const net = g.reduce((a, r) => a + r.net, 0);
+      const km = g.reduce((a, r) => a + r.distance, 0);
+      const dnpk = km ? net / km : 0;
+      const h = Math.max(4, (net / maxNet) * 120);
+      const cls = dnpk >= 14 ? "ok" : dnpk >= 10 ? "mid" : "low";
+      return `<div class="bar-col" title="${day}: ${money(net)} грн, ${f1(dnpk)} грн/км, ${g.length} поїздок">
+        <div class="bar-val">${money(net)}</div>
+        <div class="bar bar-${cls}" style="height:${h}px"></div>
+        <div class="bar-lbl">${day}</div>
+        <div class="bar-sub v-${cls}">${f1(dnpk)}</div>
+      </div>`;
+    })
+    .join("");
+  return `
+    <div class="panel">
+      <h3>Динаміка по днях <span class="hint">(висота — чистий грн, число знизу — чист/км)</span></h3>
+      <div class="chart">${bars}</div>
+    </div>`;
+}
 
-  // ---------------- Фільтри ----------------
-  const f = wb.addWorksheet("Фільтри");
-  f.getCell("A1").value = "Фільтри для Автопілота Uklon";
-  f.getCell("A1").font = TITLE;
+function goldenBanner(s: Settings): string {
+  return `
+    <div class="golden">
+      <div class="golden-icon">★</div>
+      <div>
+        <div class="golden-title">Золоте правило</div>
+        <div class="golden-body">Бери замовлення, якщо
+          <b>сума&nbsp;÷&nbsp;км&nbsp;≥&nbsp;${f1(minGrossPerKm(s))}&nbsp;грн/км</b>.
+          Беззбитковість палива з порожняком — ${f1(breakeven(s))} грн/км
+          (паливо ${f2(fuelPerKm(s))} грн/км).</div>
+      </div>
+    </div>`;
+}
+
+function autopilotBox(s: Settings): string {
   const flt = s.filters;
   const be = breakeven(s);
-  f.getCell("A3").value = "Собівартість палива, грн/км";
-  f.getCell("B3").value = round(fuelPerKm(s));
-  f.getCell("A4").value = "Собівартість з порожняком (беззбитковість), грн/км";
-  f.getCell("B4").value = round(be);
-  for (const r of [3, 4]) {
-    f.getCell(r, 1).font = BOLD;
-    f.getCell(r, 2).font = BOLD;
-    f.getCell(r, 2).fill = CFG;
-  }
-  f.getCell("A5").value = "★ ЗОЛОТЕ ПРАВИЛО: мін. валова ціна, грн/км";
-  f.getCell("B5").value = round(minGrossPerKm(s), 1);
-  f.getCell("A5").font = { bold: true, size: 12, color: { argb: "FFB00000" } };
-  f.getCell("B5").font = { bold: true, size: 12, color: { argb: "FFB00000" } };
-  f.getCell("B5").fill = GOOD;
-  f.getCell("C5").value = "= сума ÷ км. Нижче — не бери!";
-  f.getCell("C5").font = { italic: true };
-
-  f.getCell("A6").value = "Три профілі рішення (приймати/пропускати)";
-  f.getCell("A6").font = BOLD;
-  f.getCell("A6").fill = SUBH;
-  const profHdr = ["Тип", "Довжина, км", "Макс. подача, км", "Мін. грн/км", "Кінцева точка"];
-  profHdr.forEach((h, j) => {
-    const c = f.getCell(7, j + 1);
-    c.value = h;
-    c.fill = HDR;
-    c.font = HDRF;
-    c.alignment = CENTER;
-    c.border = BORDER;
-  });
-  const nMin = round(be * flt.normal_price_km_mult, 1);
-  const lMin = round(be * flt.long_price_km_mult, 1);
-  const profRows: string[][] = [
-    ["Коротка", `до ${flt.short_max_km}`, `≤ ${flt.short_max_pickup_km}`, "висока (базовий тариф)", "будь-яка в місті"],
-    ["Звичайна", `${flt.short_max_km}–${flt.normal_max_km}`, `≤ ${flt.normal_max_pickup_km}`, `≥ ${nMin}`, "НЕ глухий кут"],
-    ["Довга", `${flt.normal_max_km}+`, `≤ ${flt.long_max_pickup_km}`, `≥ ${lMin}`, "НЕ село / тупик"],
+  const profiles: [string, string, string, string, string][] = [
+    ["Коротка", `до ${flt.short_max_km} км`, `≤ ${flt.short_max_pickup_km} км`, "висока (базовий тариф)", "будь-яка в місті"],
+    ["Звичайна", `${flt.short_max_km}–${flt.normal_max_km} км`, `≤ ${flt.normal_max_pickup_km} км`, `≥ ${f1(be * flt.normal_price_km_mult)} грн/км`, "НЕ глухий кут"],
+    ["Довга", `${flt.normal_max_km}+ км`, `≤ ${flt.long_max_pickup_km} км`, `≥ ${f1(be * flt.long_price_km_mult)} грн/км`, "НЕ село / тупик"],
   ];
-  profRows.forEach((pr, i) => {
-    pr.forEach((val, j) => {
-      const c = f.getCell(i + 8, j + 1);
-      c.value = val;
-      c.border = BORDER;
-      if (j !== 0 && j !== 4) c.alignment = CENTER;
+  const rows = profiles
+    .map(
+      (p) =>
+        `<tr><td><b>${p[0]}</b></td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${p[4]}</td></tr>`,
+    )
+    .join("");
+  return `
+    <div class="grid2">
+      <div class="panel">
+        <h3>Профілі рішення</h3>
+        <table class="mini">
+          <thead><tr><th>Тип</th><th>Довжина</th><th>Макс. подача</th><th>Мін. грн/км</th><th>Кінцева</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>Налаштування Автопілота</h3>
+        <ul class="settings-list">
+          <li><span>Мін. вартість замовлення</span><b>${flt.autopilot_min_order} грн</b></li>
+          <li><span>Макс. відстань подачі</span><b>${flt.normal_max_pickup_km} км</b></li>
+          <li><span>Оплата</span><b>Готівка + Безготівка</b></li>
+          <li><span>«Мені по дорозі»</span><b>на кінець зміни</b></li>
+        </ul>
+        <div class="tags">
+          <div class="tags-title">Глухі кути:</div>
+          ${s.dead_end_areas.map((a) => `<span class="tag tag-dead">${esc(a)}</span>`).join("")}
+        </div>
+        <div class="tags">
+          <div class="tags-title">Живі зони:</div>
+          ${s.live_areas.map((a) => `<span class="tag tag-live">${esc(a)}</span>`).join("")}
+        </div>
+      </div>
+    </div>`;
+}
+
+function tripsTable(rows: Row[]): string {
+  const maxNpk = Math.max(...rows.map((r) => r.netPerKm), 1);
+  const body = rows
+    .map((r) => {
+      const barW = Math.max(0, Math.min(100, (r.netPerKm / maxNpk) * 100));
+      const zoneTag =
+        r.zone === "Глухий кут"
+          ? `<span class="tag tag-dead">Глухий кут</span>`
+          : `<span class="tag tag-city">Місто</span>`;
+      return `
+      <tr data-rec="${r.rec}">
+        <td class="nowrap">${esc(r.datetime)}</td>
+        <td>${esc(r.payment)}</td>
+        <td class="num">${money(r.amount)}</td>
+        <td class="num">${f2(r.distance)}</td>
+        <td class="addr">${esc(r.from)}</td>
+        <td class="addr">${esc(r.to)}</td>
+        <td>${zoneTag}</td>
+        <td class="num">${money(r.gas)}</td>
+        <td class="num">${money(r.net)}</td>
+        <td class="num">${f1(r.grossPerKm)}</td>
+        <td class="num">
+          <div class="npk"><div class="npk-bar" style="width:${barW}%"></div><span>${f1(r.netPerKm)}</span></div>
+        </td>
+        <td><span class="badge badge-${r.rec}">${r.rec}</span></td>
+      </tr>`;
+    })
+    .join("");
+  const headers = [
+    "Дата/час", "Оплата", "Сума", "Км", "Подача", "Призначення",
+    "Зона", "Газ", "Чистий", "грн/км", "Чист/км", "Дія",
+  ];
+  const numeric = new Set([2, 3, 7, 8, 9, 10]);
+  const ths = headers
+    .map(
+      (h, i) =>
+        `<th data-col="${i}" data-num="${numeric.has(i) ? 1 : 0}">${h}<span class="arrow"></span></th>`,
+    )
+    .join("");
+  return `
+    <div class="panel">
+      <div class="table-head">
+        <h3>Поїздки (${rows.length})</h3>
+        <div class="filters">
+          <input id="search" class="search" type="search" placeholder="🔍 адреса / дата…">
+          <button class="fbtn active" data-f="all">Усі</button>
+          <button class="fbtn" data-f="бери">🟢 бери</button>
+          <button class="fbtn" data-f="думай">🟡 думай</button>
+          <button class="fbtn" data-f="пропускай">🔴 пропускай</button>
+          <div class="dropdown">
+            <button id="dlBtn" class="fbtn dl" aria-haspopup="true" aria-expanded="false">⬇ Завантажити <span class="caret">▾</span></button>
+            <div class="dropdown-menu" id="dlMenu" role="menu">
+              <button data-dl="csv" role="menuitem">📄 CSV</button>
+              <button data-dl="pdf" role="menuitem">🧾 PDF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="trips"><thead><tr>${ths}</tr></thead><tbody>${body}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function breakdowns(rows: Row[], thr: number): string {
+  const hourOf = (r: Row) => Number(r.datetime.split(" ")[1].split(":")[0]);
+  const section = (title: string, groups: [string, Row[]][]): string => {
+    const body = groups
+      .filter(([, g]) => g.length)
+      .map(([name, g]) => {
+        const st = groupStats(g, thr);
+        const cls = st.netPerKm >= thr ? "ok" : st.netPerKm >= thr * 0.7 ? "mid" : "low";
+        return `<tr>
+          <td>${name}</td>
+          <td class="num">${st.n}</td>
+          <td class="num">${money(st.amount)}</td>
+          <td class="num">${money(st.net)}</td>
+          <td class="num"><b class="v-${cls}">${f1(st.netPerKm)}</b></td>
+          <td class="num">${Math.round(st.badPct)}%</td>
+        </tr>`;
+      })
+      .join("");
+    return `
+      <div class="panel">
+        <h3>${title}</h3>
+        <table class="mini">
+          <thead><tr><th>Група</th><th>К-сть</th><th>Виручка</th><th>Чистий</th><th>Чист/км</th><th>Погані</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+  };
+
+  const dist = section("За дистанцією", [
+    ["Коротка (<3 км)", rows.filter((r) => r.distance < 3)],
+    ["Середня (3–7 км)", rows.filter((r) => r.distance >= 3 && r.distance < 7)],
+    ["Довга (7–12 км)", rows.filter((r) => r.distance >= 7 && r.distance < 12)],
+    ["Дуже довга (12+ км)", rows.filter((r) => r.distance >= 12)],
+  ]);
+  const zone = section("За зоною", [
+    ["Місто", rows.filter((r) => r.zone === "Місто")],
+    ["Глухий кут", rows.filter((r) => r.zone === "Глухий кут")],
+  ]);
+  const hour = section("За годиною", [
+    ["до 17:00", rows.filter((r) => hourOf(r) < 17)],
+    ["17–19 (пік)", rows.filter((r) => hourOf(r) >= 17 && hourOf(r) < 19)],
+    ["19–21 (вечір)", rows.filter((r) => hourOf(r) >= 19 && hourOf(r) < 21)],
+    ["після 21", rows.filter((r) => hourOf(r) >= 21)],
+  ]);
+  const pay = section("За оплатою", [
+    ["Готівка", rows.filter((r) => r.payment === "Готівка")],
+    ["Безготівка", rows.filter((r) => r.payment === "Безготівка")],
+    ["Комбінована", rows.filter((r) => r.payment === "Комбінована")],
+  ]);
+  return `<div class="grid2">${dist}${zone}</div><div class="grid2">${hour}${pay}</div>`;
+}
+
+function worstList(rows: Row[]): string {
+  const worst = [...rows].sort((a, b) => a.netPerKm - b.netPerKm).slice(0, 8);
+  const items = worst
+    .map(
+      (r) => `
+      <li>
+        <span class="w-npk">${f1(r.netPerKm)}</span>
+        <span class="w-info">${esc(r.datetime)} · ${money(r.amount)} грн · ${f2(r.distance)} км
+          ${r.zone === "Глухий кут" ? '<span class="tag tag-dead">тупик</span>' : ""}</span>
+        <span class="w-route">${esc(r.from)} → ${esc(r.to)}</span>
+      </li>`,
+    )
+    .join("");
+  return `
+    <div class="panel">
+      <h3>🚫 Найгірші 8 (кандидати відсікати)</h3>
+      <ul class="worst">${items}</ul>
+    </div>`;
+}
+
+function render(inPath: string): string {
+  const data = loadData(inPath);
+  const s = data.settings;
+  const rows = enrich(data);
+  const thr = s.threshold_net_per_km;
+  const now = new Date().toLocaleString("uk-UA");
+
+  return `<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Taxi Helper — звіт</title>
+<style>
+:root{
+  --accent:#2E5A88; --bg:#f4f6fb; --panel:#fff; --ink:#1f2937; --muted:#6b7280;
+  --good:#16a34a; --good-bg:#dcfce7; --warn:#d97706; --warn-bg:#fef3c7;
+  --bad:#dc2626; --bad-bg:#fee2e2; --line:#e5e7eb;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--ink);line-height:1.45}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 64px}
+header h1{margin:0 0 2px;font-size:26px}
+header .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.card-val{font-size:24px;font-weight:700;color:var(--accent)}
+.card-unit{font-size:12px;font-weight:500;color:var(--muted)}
+.card-label{font-size:12px;color:var(--muted);margin-top:2px}
+.golden{display:flex;gap:14px;align-items:center;background:linear-gradient(135deg,#eef6ff,#e6fbef);
+  border:1px solid #cfe6d8;border-radius:16px;padding:18px 22px;margin-bottom:20px}
+.golden-icon{font-size:34px;color:#eab308}
+.golden-title{font-weight:700;color:var(--accent);font-size:14px;text-transform:uppercase;letter-spacing:.04em}
+.golden-body{font-size:15px}
+.golden-body b{color:var(--good);font-size:17px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;overflow:hidden;margin-bottom:16px}
+.grid2 .panel{margin-bottom:0}
+.panel h3{margin:0 0 14px;font-size:15px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:7px 9px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:12px;white-space:nowrap;cursor:pointer;user-select:none}
+th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.nowrap{white-space:nowrap}
+.addr{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151}
+.table-wrap{overflow:auto;max-height:640px;margin:0 -20px -18px;border-top:1px solid var(--line)}
+.table-wrap table{min-width:900px}
+.table-wrap thead th{position:sticky;top:0;background:#f9fafb;z-index:1}
+#trips tbody tr:hover{background:#f8fafc}
+.mini td,.mini th{padding:6px 8px}
+.mini th{cursor:default}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.badge-бери{background:var(--good-bg);color:var(--good)}
+.badge-думай{background:var(--warn-bg);color:var(--warn)}
+.badge-пропускай{background:var(--bad-bg);color:var(--bad)}
+.tag{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:600;margin:2px 3px 2px 0}
+.tag-dead{background:#ffedd5;color:#c2410c}
+.tag-live{background:#e0f2fe;color:#0369a1}
+.tag-city{background:#f3f4f6;color:#4b5563}
+.npk{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.npk-bar{position:absolute;left:0;top:50%;transform:translateY(-50%);height:16px;background:#dbeafe;border-radius:4px;z-index:0}
+.npk span{position:relative;z-index:1}
+.v-ok{color:var(--good)} .v-mid{color:var(--warn)} .v-low{color:var(--bad)}
+.table-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px 16px;margin-bottom:14px}
+.table-head h3{margin:0}
+.filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.filters .search{margin-right:4px}
+.fbtn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 11px;font-size:12px;cursor:pointer;color:var(--ink)}
+.fbtn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.settings-list{list-style:none;margin:0;padding:0}
+.settings-list li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.settings-list span{color:var(--muted)}
+.tags{margin-top:10px}
+.tags-title{font-size:12px;color:var(--muted);margin-bottom:4px}
+.worst{list-style:none;margin:0;padding:0}
+.worst li{display:grid;grid-template-columns:52px 1fr;grid-template-areas:"npk info" "npk route";
+  gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.w-npk{grid-area:npk;align-self:center;font-size:20px;font-weight:700;color:var(--bad);text-align:center}
+.w-info{grid-area:info;font-size:13px}
+.w-route{grid-area:route;font-size:12px;color:var(--muted)}
+/* Розподіл рішень */
+.ds-bar{display:flex;height:16px;border-radius:8px;overflow:hidden;margin-bottom:12px;background:var(--line)}
+.ds-seg{height:100%}
+.ds-бери{background:var(--good)} .ds-думай{background:var(--warn)} .ds-пропускай{background:var(--bad)}
+.ds-legend{display:flex;flex-direction:column;gap:6px}
+.ds-item{font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ds-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.ds-dot-бери{background:var(--good)} .ds-dot-думай{background:var(--warn)} .ds-dot-пропускай{background:var(--bad)}
+.ds-net{font-weight:700;margin-left:auto} .ds-km{color:var(--muted);min-width:66px;text-align:right}
+/* Інсайти */
+.insights{list-style:none;margin:0;padding:0}
+.insights li{font-size:13.5px;padding:8px 0;border-bottom:1px solid var(--line)}
+.insights li:last-child{border-bottom:none}
+/* Бар-чарт по днях */
+.hint{font-weight:400;font-size:11px;color:var(--muted)}
+.chart{display:flex;align-items:flex-end;gap:10px;overflow-x:auto;padding-top:8px;min-height:170px}
+.bar-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:46px;gap:3px}
+.bar{width:26px;border-radius:6px 6px 0 0}
+.bar-ok{background:var(--good)} .bar-mid{background:var(--warn)} .bar-low{background:var(--bad)}
+.bar-val{font-size:11px;font-weight:600;color:var(--ink)}
+.bar-lbl{font-size:11px;color:var(--muted);white-space:nowrap}
+.bar-sub{font-size:12px;font-weight:700}
+/* Пошук / CSV */
+.search{border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;min-width:150px}
+.fbtn.dl{border-color:var(--accent);color:var(--accent)}
+.dropdown{position:relative;display:inline-block}
+.dropdown .caret{font-size:10px}
+.dropdown-menu{position:absolute;right:0;top:calc(100% + 4px);min-width:140px;background:#fff;
+  border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,.12);
+  padding:5px;display:none;flex-direction:column;gap:2px;z-index:10}
+.dropdown-menu.open{display:flex}
+.dropdown-menu button{border:none;background:none;text-align:left;padding:8px 12px;border-radius:7px;
+  font-size:13px;cursor:pointer;color:var(--ink);white-space:nowrap}
+.dropdown-menu button:hover{background:#f3f4f6}
+footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
+@media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}}
+@media print{
+  body{background:#fff}
+  .wrap{max-width:none;padding:0}
+  .filters,footer{display:none!important}
+  .panel,.card,.golden{box-shadow:none;break-inside:avoid}
+  .table-wrap{max-height:none;overflow:visible;margin:0;border-top:none}
+  .table-wrap table{min-width:0}
+  .table-wrap thead th{position:static}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🚕 Taxi Helper — звіт прибутковості</h1>
+    <div class="sub">Uklon · Вінниця · згенеровано ${esc(now)}</div>
+  </header>
+  <div class="cards">${kpiCards(rows)}</div>
+  ${goldenBanner(s)}
+  <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
+  ${dailyTrend(rows)}
+  ${autopilotBox(s)}
+  ${tripsTable(rows)}
+  ${breakdowns(rows, thr)}
+  ${worstList(rows)}
+  <footer>Дані: data.json · формули: src/lib.ts · поріг ${thr} грн/км чистими</footer>
+</div>
+<script>
+var curRec="all";
+function applyFilters(){
+  var q=(document.getElementById("search").value||"").trim().toLowerCase();
+  document.querySelectorAll("#trips tbody tr").forEach(function(tr){
+    var okRec=(curRec==="all"||tr.dataset.rec===curRec);
+    var okQ=!q||tr.innerText.toLowerCase().indexOf(q)>-1;
+    tr.style.display=(okRec&&okQ)?"":"none";
+  });
+}
+document.querySelectorAll(".fbtn[data-f]").forEach(function(b){
+  b.addEventListener("click",function(){
+    document.querySelectorAll(".fbtn[data-f]").forEach(function(x){x.classList.remove("active")});
+    b.classList.add("active");
+    curRec=b.dataset.f;
+    applyFilters();
+  });
+});
+document.getElementById("search").addEventListener("input",applyFilters);
+function downloadCSV(){
+  var head=[].slice.call(document.querySelectorAll("#trips thead th"))
+    .map(function(th){return th.textContent.replace(/[▲▼]/g,"").trim();});
+  var lines=[head.join(";")];
+  document.querySelectorAll("#trips tbody tr").forEach(function(tr){
+    if(tr.style.display==="none")return;
+    var cells=[].slice.call(tr.children).map(function(td){
+      var t=td.innerText.replace(/\\s+/g," ").trim();
+      return /[;"\\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;
+    });
+    lines.push(cells.join(";"));
+  });
+  var blob=new Blob(["\\ufeff"+lines.join("\\n")],{type:"text/csv;charset=utf-8"});
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="trips.csv"; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function downloadPDF(){ window.print(); }
+(function(){
+  var btn=document.getElementById("dlBtn"), menu=document.getElementById("dlMenu");
+  function close(){menu.classList.remove("open");btn.setAttribute("aria-expanded","false");}
+  btn.addEventListener("click",function(e){
+    e.stopPropagation();
+    var open=menu.classList.toggle("open");
+    btn.setAttribute("aria-expanded",open?"true":"false");
+  });
+  menu.querySelectorAll("[data-dl]").forEach(function(item){
+    item.addEventListener("click",function(){
+      if(item.dataset.dl==="csv")downloadCSV(); else downloadPDF();
+      close();
     });
   });
-
-  f.getCell("A12").value = "Що виставити в Автопілоті";
-  f.getCell("A12").font = BOLD;
-  f.getCell("A12").fill = SUBH;
-  const ap: [string, string | number][] = [
-    ["Мінімальна вартість замовлення, грн", flt.autopilot_min_order],
-    ["Макс. відстань подачі, км", flt.normal_max_pickup_km],
-    ["Готівка + Безготівка", "приймати обидві"],
-    ["Фільтр 'Мені по дорозі'", "тримати на кінець зміни (уникати тупиків)"],
-  ];
-  ap.forEach(([label, val], i) => {
-    const row = i + 13;
-    f.getCell(row, 1).value = label;
-    f.getCell(row, 2).value = val;
-    f.getCell(row, 2).font = BOLD;
-    f.getCell(row, 2).fill = CFG;
+  document.addEventListener("click",close);
+  document.addEventListener("keydown",function(e){if(e.key==="Escape")close();});
+})();
+document.querySelectorAll("#trips thead th").forEach(function(th){
+  th.addEventListener("click",function(){
+    var tb=document.querySelector("#trips tbody");
+    var idx=+th.dataset.col, num=th.dataset.num==="1";
+    var dir=th.dataset.dir==="asc"?-1:1; th.dataset.dir=dir===1?"asc":"desc";
+    document.querySelectorAll("#trips thead th .arrow").forEach(function(a){a.textContent=""});
+    th.querySelector(".arrow").textContent=dir===1?"▲":"▼";
+    var rows=[].slice.call(tb.querySelectorAll("tr"));
+    rows.sort(function(a,b){
+      var x=a.children[idx].innerText.trim(), y=b.children[idx].innerText.trim();
+      if(num){return (parseFloat(x.replace(/\\s/g,""))-parseFloat(y.replace(/\\s/g,"")))*dir;}
+      return x.localeCompare(y,"uk")*dir;
+    });
+    rows.forEach(function(r){tb.appendChild(r)});
   });
-
-  f.getCell("A18").value = "Глухі кути (обережно з довгими туди):";
-  f.getCell("A18").font = BOLD;
-  f.getCell("B18").value = s.dead_end_areas.join(", ");
-  f.getCell("A19").value = "Живі зони (гарне повернення):";
-  f.getCell("A19").font = BOLD;
-  f.getCell("B19").value = s.live_areas.join(", ");
-  f.getCell("A21").value =
-    "Правило: довгу поїздку (10+ км) береш тільки якщо кінцева — жива зона або грн/км явно вище порогу.";
-  f.getCell("A21").font = { italic: true, color: { argb: "FFB00000" } };
-  f.getColumn(1).width = 42;
-  for (const col of [2, 3, 4, 5]) f.getColumn(col).width = 20;
-
-  // ---------------- Інструкція ----------------
-  const h = wb.addWorksheet("Інструкція");
-  h.getCell("A1").value = "Як користуватись";
-  h.getCell("A1").font = TITLE;
-  const lines = [
-    "1. Усі дані — у файлі data.json (налаштування + список поїздок).",
-    "2. Додаєш нову поїздку — вписуєш об'єкт у масив 'trips':",
-    '   {"datetime":"17.08 19:30","payment":"Готівка","amount":150,',
-    '    "distance":5.2,"from":"...","to":"...","zone":"Місто"}',
-    "   payment: Готівка | Безготівка | Комбінована",
-    "   zone:    Місто | Глухий кут",
-    "3. Запускаєш: npm run generate",
-    "4. Відкриваєш свіжий *-result.xlsx.",
-    "",
-    "Щоб змінити ставки/поріг — прав секцію 'settings' у data.json.",
-    "Глухий кут = напрямок, звідки важко взяти зворотне замовлення.",
-  ];
-  lines.forEach((ln, i) => (h.getCell(i + 3, 1).value = ln));
-  h.getColumn(1).width = 80;
-
-  await wb.xlsx.writeFile(outPath);
-  return [rows.length, totalNet];
+});
+</script>
+</body>
+</html>`;
 }
 
 const inPath = process.argv[2] ?? "data.json";
-const outPath = process.argv[3] ?? todayName();
-const [n, net] = await build(inPath, outPath);
-console.log(`OK: ${n} поїздок → ${outPath} | чистий прибуток: ${net.toFixed(2)} грн`);
+const outPath = process.argv[3] ?? "report.html";
+writeFileSync(outPath, render(inPath), "utf8");
+const n = loadData(inPath).trips.length;
+console.log(`OK: ${n} поїздок → ${outPath}`);
 

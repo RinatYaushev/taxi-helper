@@ -10,7 +10,6 @@
     "update-pay": "node src/updatePay.ts"
   },
   "dependencies": {
-    "exceljs": "^4.4.0",
     "jimp": "^1.6.0"
   },
   "devDependencies": {

@@ -16,6 +16,7 @@ venv/
 
 # Згенеровані артефакти
 *.xlsx
+report.html
 
 # Тимчасові файли OCR
 /tmp/ocr.txt

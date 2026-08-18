@@ -64,3 +64,29 @@ export function round(n: number, d = 2): number {
   return Math.round(n * p) / p;
 }
 
+export interface GroupStat {
+  n: number;
+  amount: number;
+  km: number;
+  net: number;
+  netPerKm: number;
+  badPct: number;
+}
+
+/** Зведена статистика для групи поїздок */
+export function groupStats(rows: Row[], threshold: number): GroupStat {
+  const n = rows.length;
+  const amount = rows.reduce((a, r) => a + r.amount, 0);
+  const km = rows.reduce((a, r) => a + r.distance, 0);
+  const net = rows.reduce((a, r) => a + r.net, 0);
+  const bad = rows.filter((r) => r.netPerKm < threshold).length;
+  return {
+    n,
+    amount,
+    km,
+    net,
+    netPerKm: km ? net / km : 0,
+    badPct: n ? (bad / n) * 100 : 0,
+  };
+}
+
