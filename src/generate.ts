@@ -31,11 +31,14 @@ function kpiCards(rows: Row[]): string {
   const comm = rows.reduce((a, r) => a + r.commission, 0);
   const net = rows.reduce((a, r) => a + r.net, 0);
   const km = rows.reduce((a, r) => a + r.distance, 0);
+  const mins = rows.reduce((a, r) => a + r.timeMin, 0);
+  const nph = mins ? net / (mins / 60) : 0;
   const cards: [string, string, string][] = [
     ["Поїздок", String(rows.length), ""],
     ["Виручка", money(amount), "грн"],
     ["Чистий прибуток", money(net), "грн"],
     ["Чистий / км", f1(km ? net / km : 0), "грн/км"],
+    ["Чистий / год", money(nph), "грн/год"],
     ["Газ", f1((gas / amount) * 100), "% виручки"],
     ["Комісія", f1((comm / amount) * 100), "% виручки"],
   ];
@@ -211,15 +214,16 @@ function tripsTable(rows: Row[]): string {
         <td class="num">
           <div class="npk"><div class="npk-bar" style="width:${barW}%"></div><span>${f1(r.netPerKm)}</span></div>
         </td>
+        <td class="num">${money(r.netPerHour)}</td>
         <td><span class="badge badge-${r.rec}">${r.rec}</span></td>
       </tr>`;
     })
     .join("");
   const headers = [
     "Дата/час", "Оплата", "Сума", "Км", "Подача", "Призначення",
-    "Зона", "Газ", "Чистий", "грн/км", "Чист/км", "Дія",
+    "Зона", "Газ", "Чистий", "грн/км", "Чист/км", "₴/год", "Дія",
   ];
-  const numeric = new Set([2, 3, 7, 8, 9, 10]);
+  const numeric = new Set([2, 3, 7, 8, 9, 10, 11]);
   const ths = headers
     .map(
       (h, i) =>
@@ -258,6 +262,8 @@ function breakdowns(rows: Row[], thr: number): string {
       .filter(([, g]) => g.length)
       .map(([name, g]) => {
         const st = groupStats(g, thr);
+        const mins = g.reduce((a, r) => a + r.timeMin, 0);
+        const nph = mins ? st.net / (mins / 60) : 0;
         const cls = st.netPerKm >= thr ? "ok" : st.netPerKm >= thr * 0.7 ? "mid" : "low";
         return `<tr>
           <td>${name}</td>
@@ -265,6 +271,7 @@ function breakdowns(rows: Row[], thr: number): string {
           <td class="num">${money(st.amount)}</td>
           <td class="num">${money(st.net)}</td>
           <td class="num"><b class="v-${cls}">${f1(st.netPerKm)}</b></td>
+          <td class="num">${money(nph)}</td>
           <td class="num">${Math.round(st.badPct)}%</td>
         </tr>`;
       })
@@ -273,7 +280,7 @@ function breakdowns(rows: Row[], thr: number): string {
       <div class="panel">
         <h3>${title}</h3>
         <table class="mini">
-          <thead><tr><th>Група</th><th>К-сть</th><th>Виручка</th><th>Чистий</th><th>Чист/км</th><th>Погані</th></tr></thead>
+          <thead><tr><th>Група</th><th>К-сть</th><th>Виручка</th><th>Чистий</th><th>Чист/км</th><th>₴/год</th><th>Погані</th></tr></thead>
           <tbody>${body}</tbody>
         </table>
       </div>`;
@@ -361,23 +368,28 @@ function modeFields(m: Mode): string {
   if (m.tariff === "Складний" && m.min_km_in_minimum != null) {
     auto.push(row("Км у мінімалці", String(m.min_km_in_minimum)));
   }
-  // Група 2 — евристика ручного рішення (в Uklon немає фільтра «₴/км»).
+  // Група 2 — евристика ручного рішення: афінний поріг мін.суми (A + B×км),
+  // виведений із ₴/год + палива + порожняку зони. В Uklon нема фільтра «₴/км».
   const manual: string[] = [];
-  manual.push(row("Місто", `≥ ${m.min_price_km_city ?? "—"} грн/км`));
+  manual.push(row("Місто", `≥ ${m.fare_a} + ${m.fare_b_city}×км грн`));
   manual.push(
     row(
       "Передмістя / тупики",
-      m.min_price_km_suburb != null
-        ? `≥ ${m.min_price_km_suburb} грн/км`
+      m.fare_b_suburb != null
+        ? `≥ ${m.fare_a} + ${m.fare_b_suburb}×км грн`
         : "❌ не брати",
     ),
   );
+  const kmHint =
+    `екв. ₴/км: місто ≈ ${m.min_price_km_city ?? "—"}` +
+    (m.min_price_km_suburb != null ? ` · тупик ≈ ${m.min_price_km_suburb}` : "");
   return `
     <div class="fx-group-title">⚙️ Вписати в Автопілот</div>
     <table class="fx-fields">${auto.join("")}</table>
     <div class="fx-manual">
-      <div class="fx-group-title">✋ Брати вручну, якщо сума÷км ≥</div>
+      <div class="fx-group-title">✋ Брати вручну, якщо сума ≥ (ціль ${m.target_ph} ₴/год)</div>
       <table class="fx-fields fx-fields-last">${manual.join("")}</table>
+      <div class="fx-kmhint">${kmHint}</div>
     </div>`;
 }
 
@@ -446,9 +458,11 @@ function autopilotModes(rows: Row[], s: Settings): string {
       <p class="fx-intro">Ідея: <b>мінімум простою</b>. Один фільтр працює <b>завжди</b>,
         а решту <b>перемикаєш сам</b> під попит — у пік жорсткіше й коротше (обіг),
         у затишшя нижча планка й довша подача (аби не стояти).
-        Пороги ₴/км рахуються із «золотого правила» (ціна газу + комісія) і
-        <b>перераховуються автоматично</b>: зміниш ціну газу — оновляться пороги,
-        додаси поїздки — оновиться бектест. Зараз база без фільтра —
+        Планка задається як <b>мінімальна сума = A + B×км</b> (афінний поріг):
+        A — фікс «за клопіт», B — за кілометр. Виводиться з <b>цілі ₴/год</b>,
+        палива, комісії та порожняку зони й <b>перераховується автоматично</b>:
+        зміниш ціну газу чи ціль ₴/год — оновляться пороги, додаси поїздки —
+        оновиться бектест. Зараз база без фільтра —
         <b>${f1(base)}</b> ₴/км чистими на ${rows.length} поїздках.</p>
       ${disclaimer}
       <div class="fx-always-wrap">${alwaysCards}</div>
@@ -582,7 +596,7 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
 .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 64px}
 header h1{margin:0 0 2px;font-size:26px}
 header .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
-.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:20px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
 .card-val{font-size:24px;font-weight:700;color:var(--accent)}
 .card-unit{font-size:12px;font-weight:500;color:var(--muted)}
@@ -665,6 +679,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-group-title{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 3px}
 .fx-group-title:first-child{margin-top:0}
 .fx-manual{margin-top:auto;padding-top:6px}
+.fx-kmhint{font-size:11px;color:var(--muted);margin-top:2px;text-align:right}
 .fx-fields-last{margin-bottom:12px}
 .fx-warn{background:var(--warn-bg);border:1px solid #f4d58a;border-radius:10px;padding:9px 12px;font-size:12.5px;margin:0 0 14px}
 .fx-preview{margin-top:10px;width:100%;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer}
@@ -845,15 +860,16 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
     badge.textContent="🔔 зараз радимо · "+why;sCard.appendChild(badge);}
   // Прев'ю: підсвітити, які історичні поїздки цей режим узяв би / відсік.
   function jsPass(m,tr){
-    var amount=+tr.dataset.amount, dist=+tr.dataset.dist, gross=+tr.dataset.gross,
+    var amount=+tr.dataset.amount, dist=+tr.dataset.dist,
         zone=tr.dataset.zone, pickup=tr.dataset.pickup;
     if(tr.dataset.longhaul==="1")return false;
     if(amount<m.min_order)return false;
     if(m.max_km&&dist>m.max_km)return false;
     if(pickup!=null&&pickup!==""&&(+pickup)>m.max_pickup_km)return false;
-    if(zone==="Місто")return gross>=(m.min_price_km_city!=null?m.min_price_km_city:Infinity);
-    if(m.city_only||m.min_price_km_suburb==null)return false;
-    return gross>=m.min_price_km_suburb;
+    var a=(m.fare_a!=null?m.fare_a:0);
+    if(zone==="Місто")return amount>=a+(m.fare_b_city!=null?m.fare_b_city:Infinity)*dist;
+    if(m.city_only||m.fare_b_suburb==null)return false;
+    return amount>=a+m.fare_b_suburb*dist;
   }
   var active=null;
   function clearPreview(){

@@ -1,6 +1,6 @@
 // Спільні формули та завантаження даних
 import { readFileSync, writeFileSync } from "node:fs";
-import type { Data, Settings, Trip, Computed, Row, Mode } from "./types.ts";
+import type { Data, Settings, Trip, Computed, Row, Mode, Zone } from "./types.ts";
 
 export function loadData(path = "data.json"): Data {
   return JSON.parse(readFileSync(path, "utf8")) as Data;
@@ -15,10 +15,42 @@ export function fuelPerKm(s: Settings): number {
   return (s.gas_consumption_l_100km / 100) * s.gas_price_per_l;
 }
 
+/** Коеф. порожняку для зони призначення (місто/глухий кут), fallback — глобальний. */
+export function emptyCoefZone(zone: Zone, s: Settings): number {
+  return s.empty_run_by_zone?.[zone] ?? s.empty_run_coef;
+}
+
 /** Коеф. порожняку для поїздки — залежить від зони призначення (місто/глухий кут).
  *  Fallback — глобальний empty_run_coef, якщо зони немає в мапі. */
 export function emptyCoef(t: Trip, s: Settings): number {
-  return s.empty_run_by_zone?.[t.zone] ?? s.empty_run_coef;
+  return emptyCoefZone(t.zone, s);
+}
+
+/** Базова планка ₴/год для афінного порогу. */
+export function baseTargetPh(s: Settings): number {
+  return s.target_net_per_hour ?? 200;
+}
+
+/**
+ * Афінний поріг мінімальної суми: `A + B×км` (для заданого цільового ₴/год і зони).
+ * Виводиться з моделі часу + палива + комісії (подача=0 для правила):
+ *   A = targetPh × накладні/60 / (1−c)                     — фікс «за клопіт»
+ *   B = (1+порожняк) × (targetPh/швидкість + паливо/км)/(1−c) — грн/км
+ */
+export function fareAB(s: Settings, targetPh: number, zone: Zone): { a: number; b: number } {
+  const speed = s.time_model?.avg_speed_kmh ?? 24;
+  const overhead = s.time_model?.order_overhead_min ?? 4;
+  const c = s.commission_uklon_pct / 100;
+  const k = 1 + emptyCoefZone(zone, s);
+  const a = (targetPh * overhead) / 60 / (1 - c);
+  const b = (k * (targetPh / speed + fuelPerKm(s))) / (1 - c);
+  return { a, b };
+}
+
+/** Мінімально прийнятна сума замовлення для зони (афінний поріг). */
+export function minFare(dist: number, zone: Zone, targetPh: number, s: Settings): number {
+  const { a, b } = fareAB(s, targetPh, zone);
+  return a + b * dist;
 }
 
 /** Беззбитковість з урахуванням порожнього пробігу, грн/км */
@@ -39,14 +71,25 @@ export function minGrossPerKm(s: Settings): number {
  */
 export function deriveModes(s: Settings): import("./types.ts").Mode[] {
   const g = minGrossPerKm(s);
-  return s.modes.map((m) => ({
-    ...m,
-    min_price_km_city: Math.round(g * m.price_km_mult),
-    min_price_km_suburb:
-      m.price_km_suburb_mult != null
-        ? Math.round(g * m.price_km_suburb_mult)
-        : undefined,
-  }));
+  const basePh = baseTargetPh(s);
+  return s.modes.map((m) => {
+    const targetPh = Math.round(basePh * m.price_km_mult);
+    const city = fareAB(s, targetPh, "Місто");
+    const suburb = fareAB(s, targetPh, "Глухий кут");
+    const suburbAllowed = !m.city_only && m.price_km_suburb_mult != null;
+    return {
+      ...m,
+      min_price_km_city: Math.round(g * m.price_km_mult),
+      min_price_km_suburb:
+        m.price_km_suburb_mult != null
+          ? Math.round(g * m.price_km_suburb_mult)
+          : undefined,
+      target_ph: targetPh,
+      fare_a: Math.round(city.a),
+      fare_b_city: Math.round(city.b),
+      fare_b_suburb: suburbAllowed ? Math.round(suburb.b) : undefined,
+    };
+  });
 }
 
 /** Локалітети призначення — текст у дужках, де за конвенцією стоїть село/місто
@@ -152,19 +195,23 @@ export function npkOf(rs: Row[]): number {
 }
 
 /**
- * Предикат «пройде замовлення крізь режим?». Подача перевіряється лише коли
- * вона відома (pickup_km); суму, дистанцію, зону й ₴/км (grossPerKm) — завжди.
- * `m` має бути похідним режимом із deriveModes() (пороги вже пораховані).
+ * Предикат «пройде замовлення крізь режим?». Економічний гейт — **афінний поріг
+ * мінімальної суми** (fare_a + fare_b×км), виведений із моделі часу/палива/комісії.
+ * Подача перевіряється лише коли відома (pickup_km). max_km — стратегічний кап
+ * (обіг у пік), не економіка. `m` має бути похідним режимом із deriveModes().
  */
 export function modePass(r: Row, m: Mode): boolean {
   if (r.longHaul) return false; // дальняк (міжміський) — окрема логіка, Автопілот off
-  if (r.amount < m.min_order) return false;
-  if (m.max_km && r.distance > m.max_km) return false;
+  if (r.amount < m.min_order) return false; // платформна мінімалка Uklon
+  if (m.max_km && r.distance > m.max_km) return false; // стратегічний кап обігу
   if (r.pickup_km != null && r.pickup_km > m.max_pickup_km) return false;
-  if (r.zone === "Місто") return r.grossPerKm >= (m.min_price_km_city ?? Infinity);
+  const a = m.fare_a ?? 0;
+  if (r.zone === "Місто") {
+    return r.amount >= a + (m.fare_b_city ?? Infinity) * r.distance;
+  }
   // Глухий кут:
-  if (m.city_only || m.min_price_km_suburb == null) return false;
-  return r.grossPerKm >= m.min_price_km_suburb;
+  if (m.city_only || m.fare_b_suburb == null) return false;
+  return r.amount >= a + m.fare_b_suburb * r.distance;
 }
 
 export interface ModeStat {

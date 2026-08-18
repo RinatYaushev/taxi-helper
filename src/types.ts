@@ -25,6 +25,14 @@ export interface Mode {
   min_price_km_city?: number;
   /** Обчислюється в deriveModes() з price_km_suburb_mult; інакше тупики off. */
   min_price_km_suburb?: number;
+  /** Похідне: цільові ₴/год для режиму (base target_net_per_hour × price_km_mult). */
+  target_ph?: number;
+  /** Похідне: афінний поріг мін.суми = fare_a + fare_b×км. A — фікс «за клопіт». */
+  fare_a?: number;
+  /** Похідне: нахил B для міста (грн/км). */
+  fare_b_city?: number;
+  /** Похідне: нахил B для тупиків (грн/км); undefined — тупики off. */
+  fare_b_suburb?: number;
   max_pickup_km: number;
   /** Верхня межа дистанції поїздки (для обігу в пік); 0/відсутнє — без межі. */
   max_km?: number;
@@ -45,6 +53,9 @@ export interface Settings {
   commission_cashless_pct: number;
   threshold_net_per_km: number;
   marginal_net_per_km: number;
+  /** Базова планка чистими за годину — основа афінного порогу мін.суми.
+   *  Режим множить її на price_km_mult (пік вище, затишшя нижче). */
+  target_net_per_hour?: number;
   /** Модель часу для метрики ₴/год. Час = order_overhead_min +
    *  (подача + пробіг + порожняк назад)/avg_speed_kmh. Крутилки, тюняться. */
   time_model?: {
