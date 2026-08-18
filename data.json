@@ -3,6 +3,10 @@
     "gas_consumption_l_100km": 13.5,
     "gas_price_per_l": 43.6,
     "empty_run_coef": 0.5,
+    "empty_run_by_zone": {
+      "Місто": 0.3,
+      "Глухий кут": 1.0
+    },
     "commission_uklon_pct": 18,
     "commission_cashless_pct": 2,
     "threshold_net_per_km": 14,

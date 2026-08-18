@@ -37,6 +37,10 @@ export interface Settings {
   gas_consumption_l_100km: number;
   gas_price_per_l: number;
   empty_run_coef: number;
+  /** Порожняк за зоною призначення (частка від пробігу). Місто → малий (наступне
+   *  замовлення поруч), глухий кут → ~1.0 (повертаєшся порожнем). Якщо зони нема
+   *  у мапі — береться empty_run_coef як типовий fallback. */
+  empty_run_by_zone?: Partial<Record<Zone, number>>;
   commission_uklon_pct: number;
   commission_cashless_pct: number;
   threshold_net_per_km: number;

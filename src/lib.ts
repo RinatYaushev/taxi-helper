@@ -15,6 +15,12 @@ export function fuelPerKm(s: Settings): number {
   return (s.gas_consumption_l_100km / 100) * s.gas_price_per_l;
 }
 
+/** Коеф. порожняку для поїздки — залежить від зони призначення (місто/глухий кут).
+ *  Fallback — глобальний empty_run_coef, якщо зони немає в мапі. */
+export function emptyCoef(t: Trip, s: Settings): number {
+  return s.empty_run_by_zone?.[t.zone] ?? s.empty_run_coef;
+}
+
 /** Беззбитковість з урахуванням порожнього пробігу, грн/км */
 export function breakeven(s: Settings): number {
   return fuelPerKm(s) * (1 + s.empty_run_coef);
@@ -78,7 +84,7 @@ export function compute(t: Trip, s: Settings): Computed {
   const amount = Number(t.amount);
   const dist = Number(t.distance);
   const fpk = fuelPerKm(s);
-  const gas = dist * (1 + s.empty_run_coef) * fpk;
+  const gas = dist * (1 + emptyCoef(t, s)) * fpk;
   let commission = (amount * s.commission_uklon_pct) / 100;
   if (t.payment === "Безготівка") {
     commission += (amount * s.commission_cashless_pct) / 100;
