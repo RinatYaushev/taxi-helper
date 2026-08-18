@@ -1,0 +1,4 @@
+# Python-залежності для taxi-helper
+openpyxl>=3.1
+Pillow>=10.0
+
