@@ -1,6 +1,7 @@
-,0name: Publish report to GitHub Pages
+name: Publish report to GitHub Pages
 
 # Публікує самодостатній HTML-звіт на GitHub Pages (репозиторій публічний).
+# Source у Settings → Pages має бути "GitHub Actions".
 on:
   push:
     branches: [main]
