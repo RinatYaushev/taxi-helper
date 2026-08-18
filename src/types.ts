@@ -3,16 +3,6 @@
 export type Payment = "Готівка" | "Безготівка" | "Комбінована";
 export type Zone = "Місто" | "Глухий кут";
 
-export interface Filters {
-  short_max_km: number;
-  short_max_pickup_km: number;
-  normal_max_km: number;
-  normal_max_pickup_km: number;
-  normal_price_km_mult: number;
-  long_max_pickup_km: number;
-  long_price_km_mult: number;
-  autopilot_min_order: number;
-}
 
 /** Пресет фільтра «Автопілота» під певний рівень попиту. */
 export interface Mode {
@@ -51,7 +41,6 @@ export interface Settings {
   commission_cashless_pct: number;
   threshold_net_per_km: number;
   marginal_net_per_km: number;
-  filters: Filters;
   modes: Mode[];
   dead_end_areas: string[];
   live_areas: string[];

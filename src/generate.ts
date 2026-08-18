@@ -179,48 +179,6 @@ function goldenBanner(s: Settings): string {
     </div>`;
 }
 
-function autopilotBox(s: Settings): string {
-  const flt = s.filters;
-  const be = breakeven(s);
-  const profiles: [string, string, string, string, string][] = [
-    ["Коротка", `до ${flt.short_max_km} км`, `≤ ${flt.short_max_pickup_km} км`, "висока (базовий тариф)", "будь-яка в місті"],
-    ["Звичайна", `${flt.short_max_km}–${flt.normal_max_km} км`, `≤ ${flt.normal_max_pickup_km} км`, `≥ ${f1(be * flt.normal_price_km_mult)} грн/км`, "НЕ глухий кут"],
-    ["Довга", `${flt.normal_max_km}+ км`, `≤ ${flt.long_max_pickup_km} км`, `≥ ${f1(be * flt.long_price_km_mult)} грн/км`, "НЕ село / тупик"],
-  ];
-  const rows = profiles
-    .map(
-      (p) =>
-        `<tr><td><b>${p[0]}</b></td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${p[4]}</td></tr>`,
-    )
-    .join("");
-  return `
-    <div class="grid2">
-      <div class="panel">
-        <h3>Профілі рішення</h3>
-        <table class="mini">
-          <thead><tr><th>Тип</th><th>Довжина</th><th>Макс. подача</th><th>Мін. грн/км</th><th>Кінцева</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-      <div class="panel">
-        <h3>Налаштування Автопілота</h3>
-        <ul class="settings-list">
-          <li><span>Мін. вартість замовлення</span><b>${flt.autopilot_min_order} грн</b></li>
-          <li><span>Макс. відстань подачі</span><b>${flt.normal_max_pickup_km} км</b></li>
-          <li><span>Оплата</span><b>Готівка + Безготівка</b></li>
-          <li><span>«Мені по дорозі»</span><b>на кінець зміни</b></li>
-        </ul>
-        <div class="tags">
-          <div class="tags-title">Глухі кути:</div>
-          ${s.dead_end_areas.map((a) => `<span class="tag tag-dead">${esc(a)}</span>`).join("")}
-        </div>
-        <div class="tags">
-          <div class="tags-title">Живі зони:</div>
-          ${s.live_areas.map((a) => `<span class="tag tag-live">${esc(a)}</span>`).join("")}
-        </div>
-      </div>
-    </div>`;
-}
 
 function tripsTable(rows: Row[]): string {
   const maxNpk = Math.max(...rows.map((r) => r.netPerKm), 1);
@@ -232,7 +190,7 @@ function tripsTable(rows: Row[]): string {
           ? `<span class="tag tag-dead">Глухий кут</span>`
           : `<span class="tag tag-city">Місто</span>`;
       return `
-      <tr data-rec="${r.rec}">
+      <tr data-rec="${r.rec}" data-amount="${r.amount}" data-dist="${r.distance}" data-gross="${f1(r.grossPerKm)}" data-zone="${esc(r.zone)}"${r.pickup_km != null ? ` data-pickup="${r.pickup_km}"` : ""}>
         <td class="nowrap">${esc(r.datetime)}</td>
         <td>${esc(r.payment)}</td>
         <td class="num">${money(r.amount)}</td>
@@ -379,6 +337,7 @@ function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
   const pass = rows.filter((r) => modePass(r, m));
   const cut = rows.filter((r) => !modePass(r, m));
   const below = pass.filter((r) => r.netPerKm < thr).length;
+  const missedGood = cut.filter((r) => r.netPerKm >= thr).length;
   const delta = npkOf(pass) - base;
   return `<div class="fx-bt">
     <div class="fx-bt-row"><span>Пройшло на історії</span>
@@ -389,6 +348,8 @@ function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
     <div class="fx-bt-row"><span>Відсічено</span>
       <b>${cut.length}</b>
       <span class="fx-delta">сер. <b class="v-low">${f1(npkOf(cut))}</b> ₴/км</span></div>
+    <div class="fx-bt-row"><span>❗ Прибуткових відсічено (ризик простою)</span>
+      <b class="${missedGood ? "v-low" : "v-ok"}">${missedGood}</b></div>
     <div class="fx-bt-row"><span>З пройдених нижче порогу (${thr})</span>
       <b class="${below ? "v-low" : "v-ok"}">${below}</b></div>
   </div>`;
@@ -397,22 +358,37 @@ function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
 function modeFields(m: Mode): string {
   const row = (label: string, value: string): string =>
     `<tr><td>${label}</td><td><b>${value}</b></td></tr>`;
-  const out: string[] = [];
-  out.push(row("Тариф", m.tariff));
-  out.push(row("Мін. вартість", `${m.min_order} грн`));
+  // Група 1 — конкретні налаштування, які реально вписуються в Автопілот Uklon.
+  const auto: string[] = [];
+  auto.push(row("Тариф", m.tariff));
+  auto.push(row("Мін. вартість замовлення", `${m.min_order} грн`));
+  auto.push(row("Відстань подачі", `≤ ${f1(m.max_pickup_km)} км`));
+  auto.push(
+    row(
+      "Сектори призначення",
+      m.city_only ? "лише місто (без сіл)" : "місто + передмістя за ₴/км",
+    ),
+  );
+  if (m.max_km) auto.push(row("Не брати довші", `> ${m.max_km} км`));
   if (m.tariff === "Складний" && m.min_km_in_minimum != null) {
-    out.push(row("Км у мінімалці", String(m.min_km_in_minimum)));
+    auto.push(row("Км у мінімалці", String(m.min_km_in_minimum)));
   }
-  out.push(row("Мін. ціна ₴/км (місто)", String(m.min_price_km_city ?? "—")));
-  if (m.min_price_km_suburb != null) {
-    out.push(row("Мін. ціна ₴/км (передмістя)", String(m.min_price_km_suburb)));
-  } else {
-    out.push(row("Передмістя / тупики", "❌ вимкнути"));
-  }
-  out.push(row("Відстань подачі", `≤ ${f1(m.max_pickup_km)} км`));
-  if (m.max_km) out.push(row("Тільки поїздки", `≤ ${m.max_km} км`));
-  if (m.city_only) out.push(row("Лише по місту", "✓ увімкнути"));
-  return out.join("");
+  // Група 2 — евристика ручного рішення (в Uklon немає фільтра «₴/км»).
+  const manual: string[] = [];
+  manual.push(row("Місто", `≥ ${m.min_price_km_city ?? "—"} грн/км`));
+  manual.push(
+    row(
+      "Передмістя / тупики",
+      m.min_price_km_suburb != null
+        ? `≥ ${m.min_price_km_suburb} грн/км`
+        : "❌ не брати",
+    ),
+  );
+  return `
+    <div class="fx-group-title">⚙️ Вписати в Автопілот</div>
+    <table class="fx-fields">${auto.join("")}</table>
+    <div class="fx-group-title">✋ Брати вручну, якщо сума÷км ≥</div>
+    <table class="fx-fields">${manual.join("")}</table>`;
 }
 
 // Головна секція: режими фільтрів «Автопілота» під рівень попиту.
@@ -426,12 +402,13 @@ function autopilotModes(rows: Row[], s: Settings): string {
   const alwaysCards = always
     .map(
       (m) => `
-      <div class="fx-card fx-always">
+      <div class="fx-card fx-always" data-mode="${m.id}">
         <div class="fx-title">${m.icon} ${esc(m.name)}
           <span class="fx-badge fx-badge-on">завжди активний</span></div>
         <div class="fx-sub">${esc(m.when)}</div>
-        <table class="fx-fields">${modeFields(m)}</table>
+        ${modeFields(m)}
         ${modeBacktest(rows, m, base, thr)}
+        <button class="fx-preview" data-mode="${m.id}">🔎 Показати на історії</button>
       </div>`,
     )
     .join("");
@@ -439,12 +416,13 @@ function autopilotModes(rows: Row[], s: Settings): string {
   const switchCards = switchable
     .map(
       (m) => `
-      <div class="fx-card">
+      <div class="fx-card" data-mode="${m.id}">
         <div class="fx-title">${m.icon} ${esc(m.name)}
           <span class="fx-badge">${esc(m.tariff)}</span></div>
         <div class="fx-sub">${esc(m.when)}</div>
-        <table class="fx-fields">${modeFields(m)}</table>
+        ${modeFields(m)}
         ${modeBacktest(rows, m, base, thr)}
+        <button class="fx-preview" data-mode="${m.id}">🔎 Показати на історії</button>
       </div>`,
     )
     .join("");
@@ -452,12 +430,25 @@ function autopilotModes(rows: Row[], s: Settings): string {
   const deadTags = s.dead_end_areas
     .map((a) => `<span class="tag tag-dead">${esc(a)}</span>`)
     .join("");
+  const liveTags = s.live_areas
+    .map((a) => `<span class="tag tag-live">${esc(a)}</span>`)
+    .join("");
+
+  const days = new Set(rows.map((r) => r.datetime.split(" ")[0])).size;
+  const smallSample = rows.length < 100 || days < 4;
+  const disclaimer = smallSample
+    ? `<div class="fx-warn">⚠️ Вибірка ще мала (<b>${rows.length}</b> поїздок за <b>${days}</b> дн.) —
+        числа бектесту орієнтовні й уточнюватимуться з накопиченням даних.</div>`
+    : "";
+
+  // Дані режимів для клієнтського прев'ю (підсвітка pass/fail у таблиці поїздок).
+  const modesJson = JSON.stringify(modes).replace(/</g, "\\u003c");
 
   return `
     <div class="panel fx-panel fx-hero">
       <div class="fx-hero-head">
         <h3>🎯 Готові фільтри для Автопілота</h3>
-        <span class="hint">значення вписуй у форму «Новий фільтр» · перемикай режим вручну під ситуацію</span>
+        <span class="hint">⚙️ = вписати в Автопілот · ✋ = евристика ручного рішення · 🔎 = підсвітити на історії</span>
       </div>
       <p class="fx-intro">Ідея: <b>мінімум простою</b>. Один фільтр працює <b>завжди</b>,
         а решту <b>перемикаєш сам</b> під попит — у пік жорсткіше й коротше (обіг),
@@ -466,13 +457,15 @@ function autopilotModes(rows: Row[], s: Settings): string {
         <b>перераховуються автоматично</b>: зміниш ціну газу — оновляться пороги,
         додаси поїздки — оновиться бектест. Зараз база без фільтра —
         <b>${f1(base)}</b> ₴/км чистими на ${rows.length} поїздках.</p>
+      ${disclaimer}
       <div class="fx-always-wrap">${alwaysCards}</div>
       <div class="fx-switch-title">Перемикай під попит:</div>
       <div class="grid3 fx-grid">${switchCards}</div>
       <div class="fx-note">
-        <b>Куди → Сектори призначення:</b> у whitelist додавай лише живі райони.
-        А ці <b>не</b> додавай (глухі кути): ${deadTags}
+        <b>Сектори призначення (whitelist):</b> додавай живі райони — ${liveTags}<br>
+        <b>НЕ додавай</b> глухі кути (єдине, що реально збиткове): ${deadTags}
       </div>
+      <script>window.__MODES__=${modesJson};</script>
     </div>`;
 }
 
@@ -580,6 +573,16 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-bt-row span:first-child{color:var(--muted)}
 .fx-delta{color:var(--muted);font-weight:400}
 .fx-note{margin-top:14px;font-size:12.5px;color:var(--ink);border-top:1px solid var(--line);padding-top:12px}
+.fx-group-title{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 3px}
+.fx-group-title:first-child{margin-top:0}
+.fx-warn{background:var(--warn-bg);border:1px solid #f4d58a;border-radius:10px;padding:9px 12px;font-size:12.5px;margin:0 0 14px}
+.fx-preview{margin-top:10px;width:100%;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer}
+.fx-preview:hover{background:#eef4fc}
+.fx-preview.active{background:var(--accent);color:#fff}
+.fx-now{display:inline-block;font-size:10.5px;font-weight:700;background:var(--warn-bg);color:#92600a;border:1px solid #f4d58a;padding:2px 8px;border-radius:999px;margin-left:4px}
+tr.mode-cut{opacity:.32}
+tr.mode-pass{background:#f0fdf4}
+tr.mode-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
 .worst{list-style:none;margin:0;padding:0}
 .worst li{display:grid;grid-template-columns:52px 1fr;grid-template-areas:"npk info" "npk route";
   gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
@@ -644,7 +647,6 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   ${autopilotModes(rows, s)}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
   ${dailyTrend(rows)}
-  ${autopilotBox(s)}
   ${tripsTable(rows)}
   ${breakdowns(rows, thr)}
   ${worstList(rows)}
@@ -721,6 +723,49 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
     rows.forEach(function(r){tb.appendChild(r)});
   });
 });
+// --- Режими фільтрів: підказка за часом + прев'ю на історії ---
+(function(){
+  var modes=window.__MODES__||[];
+  var byId={}; modes.forEach(function(m){byId[m.id]=m;});
+  // Підказка режиму за поточним часом/днем (короткі поруч — завжди активні).
+  var now=new Date(), day=now.getDay(), h=now.getHours(), weekend=(day===0||day===6);
+  var sug, why;
+  if(!weekend&&h>=17&&h<20){sug="rush";why="будній вечірній пік";}
+  else if(h>=20&&h<23){sug="normal";why="вечірній трафік";}
+  else if(weekend&&h>=11&&h<23){sug="normal";why="активні вихідні";}
+  else{sug="calm";why="низький попит";}
+  var sCard=document.querySelector('.fx-card[data-mode="'+sug+'"] .fx-title');
+  if(sCard){var badge=document.createElement("span");badge.className="fx-now";
+    badge.textContent="🔔 зараз радимо · "+why;sCard.appendChild(badge);}
+  // Прев'ю: підсвітити, які історичні поїздки цей режим узяв би / відсік.
+  function jsPass(m,tr){
+    var amount=+tr.dataset.amount, dist=+tr.dataset.dist, gross=+tr.dataset.gross,
+        zone=tr.dataset.zone, pickup=tr.dataset.pickup;
+    if(amount<m.min_order)return false;
+    if(m.max_km&&dist>m.max_km)return false;
+    if(pickup!=null&&pickup!==""&&(+pickup)>m.max_pickup_km)return false;
+    if(zone==="Місто")return gross>=(m.min_price_km_city!=null?m.min_price_km_city:Infinity);
+    if(m.city_only||m.min_price_km_suburb==null)return false;
+    return gross>=m.min_price_km_suburb;
+  }
+  var active=null;
+  function clearPreview(){
+    document.querySelectorAll("#trips tbody tr").forEach(function(tr){
+      tr.classList.remove("mode-pass","mode-cut");});
+    document.querySelectorAll(".fx-preview").forEach(function(b){b.classList.remove("active");});
+    active=null;
+  }
+  document.querySelectorAll(".fx-preview").forEach(function(btn){
+    btn.addEventListener("click",function(){
+      var id=btn.dataset.mode, m=byId[id];
+      if(active===id||!m){clearPreview();return;}
+      clearPreview(); active=id; btn.classList.add("active");
+      document.querySelectorAll("#trips tbody tr").forEach(function(tr){
+        tr.classList.add(jsPass(m,tr)?"mode-pass":"mode-cut");});
+      document.getElementById("trips").scrollIntoView({behavior:"smooth",block:"start"});
+    });
+  });
+})();
 </script>
 </body>
 </html>`;
