@@ -8,8 +8,14 @@ import {
   minGrossPerKm,
   deriveModes,
   groupStats,
+  npkOf,
+  modeStats,
+  buildSnapshot,
+  loadSnapshot,
+  saveSnapshot,
 } from "./lib.ts";
-import type { Row, Settings, Mode } from "./types.ts";
+import type { Snapshot } from "./lib.ts";
+import type { Row, Settings, Mode, Data } from "./types.ts";
 
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) =>
@@ -316,42 +322,22 @@ function worstList(rows: Row[]): string {
     </div>`;
 }
 
-function npkOf(rs: Row[]): number {
-  const km = rs.reduce((a, r) => a + r.distance, 0);
-  return km ? rs.reduce((a, r) => a + r.net, 0) / km : 0;
-}
-
-// Предикат «пройде замовлення крізь режим?». Подача перевіряється лише коли
-// вона відома (pickup_km); суму, дистанцію, зону й ₴/км (grossPerKm) — завжди.
-function modePass(r: Row, m: Mode): boolean {
-  if (r.amount < m.min_order) return false;
-  if (m.max_km && r.distance > m.max_km) return false;
-  if (r.pickup_km != null && r.pickup_km > m.max_pickup_km) return false;
-  if (r.zone === "Місто") return r.grossPerKm >= (m.min_price_km_city ?? Infinity);
-  // Глухий кут:
-  if (m.city_only || m.min_price_km_suburb == null) return false;
-  return r.grossPerKm >= m.min_price_km_suburb;
-}
-
 function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
-  const pass = rows.filter((r) => modePass(r, m));
-  const cut = rows.filter((r) => !modePass(r, m));
-  const below = pass.filter((r) => r.netPerKm < thr).length;
-  const missedGood = cut.filter((r) => r.netPerKm >= thr).length;
-  const delta = npkOf(pass) - base;
+  const st = modeStats(rows, m, thr);
+  const delta = st.npkPass - base;
   return `<div class="fx-bt">
     <div class="fx-bt-row"><span>Пройшло на історії</span>
-      <b>${pass.length}/${rows.length}</b></div>
+      <b>${st.pass}/${rows.length}</b></div>
     <div class="fx-bt-row"><span>Чист/км після фільтра</span>
-      <b class="v-ok">${f1(npkOf(pass))}</b>
+      <b class="v-ok">${f1(st.npkPass)}</b>
       <span class="fx-delta">(база ${f1(base)}, ${delta >= 0 ? "+" : ""}${f1(delta)})</span></div>
     <div class="fx-bt-row"><span>Відсічено</span>
-      <b>${cut.length}</b>
-      <span class="fx-delta">сер. <b class="v-low">${f1(npkOf(cut))}</b> ₴/км</span></div>
+      <b>${st.cut}</b>
+      <span class="fx-delta">сер. <b class="v-low">${f1(st.npkCut)}</b> ₴/км</span></div>
     <div class="fx-bt-row"><span>❗ Прибуткових відсічено (ризик простою)</span>
-      <b class="${missedGood ? "v-low" : "v-ok"}">${missedGood}</b></div>
+      <b class="${st.missedGood ? "v-low" : "v-ok"}">${st.missedGood}</b></div>
     <div class="fx-bt-row"><span>З пройдених нижче порогу (${thr})</span>
-      <b class="${below ? "v-low" : "v-ok"}">${below}</b></div>
+      <b class="${st.below ? "v-low" : "v-ok"}">${st.below}</b></div>
   </div>`;
 }
 
@@ -469,8 +455,102 @@ function autopilotModes(rows: Row[], s: Settings): string {
     </div>`;
 }
 
-function render(inPath: string): string {
-  const data = loadData(inPath);
+// Дифф-панель: що змінилось порівняно з минулим запуском generate.
+function changesPanel(prev: Snapshot | null, cur: Snapshot): string {
+  if (!prev) {
+    return `
+    <div class="panel chg-panel">
+      <h3>🔁 Що змінилось з минулого запуску</h3>
+      <p class="chg-empty">Це перший знімок — базлайн збережено у <code>.report-state.json</code>.
+        Наступного разу (додаси поїздки або зміниш ціну газу) тут зʼявиться порівняння.</p>
+    </div>`;
+  }
+
+  const badge = (
+    d: number,
+    digits: number,
+    goodWhenUp: boolean | null,
+  ): string => {
+    if (Math.abs(d) < (digits === 0 ? 0.5 : 0.005)) return "";
+    const sign = d > 0 ? "+" : "";
+    let cls = "chg-neutral";
+    if (goodWhenUp === true) cls = d > 0 ? "chg-up" : "chg-down";
+    else if (goodWhenUp === false) cls = d > 0 ? "chg-down" : "chg-up";
+    return ` <i class="${cls}">${sign}${d.toFixed(digits)}</i>`;
+  };
+  const pair = (
+    a: number,
+    b: number,
+    digits: number,
+    goodWhenUp: boolean | null,
+  ): string => {
+    const val =
+      a.toFixed(digits) === b.toFixed(digits)
+        ? b.toFixed(digits)
+        : `${a.toFixed(digits)} → ${b.toFixed(digits)}`;
+    return `<b>${val}</b>${badge(b - a, digits, goodWhenUp)}`;
+  };
+
+  const sigChanged = JSON.stringify(prev.sig) !== JSON.stringify(cur.sig);
+
+  const thrRows: string[] = [];
+  for (const m of cur.modes) {
+    const p = prev.modes.find((x) => x.id === m.id);
+    if (!p) continue;
+    if (p.cityPrice !== m.cityPrice) {
+      thrRows.push(
+        `<li>${esc(m.name)} · місто: <b>${p.cityPrice ?? "—"} → ${m.cityPrice ?? "—"}</b> грн/км</li>`,
+      );
+    }
+    if (p.suburbPrice !== m.suburbPrice) {
+      thrRows.push(
+        `<li>${esc(m.name)} · передмістя: <b>${p.suburbPrice ?? "❌"} → ${m.suburbPrice ?? "❌"}</b> грн/км</li>`,
+      );
+    }
+  }
+  const thrNote = thrRows.length
+    ? `<div class="chg-note chg-note-warn"><b>⚙️ Пороги ₴/км змінились</b>
+        (${sigChanged ? "змінились витрати: газ / комісія / поріг" : "змінили множники режимів"}):
+        <ul>${thrRows.join("")}</ul></div>`
+    : `<div class="chg-note"><b>Пороги ₴/км без змін.</b> Вони залежать від <b>витрат</b>
+        (газ, комісія), а не від кількості поїздок — нові замовлення оновлюють лише бектест нижче.</div>`;
+
+  const items = `
+    <div class="chg-item"><span>Поїздки</span>${pair(prev.trips, cur.trips, 0, null)}</div>
+    <div class="chg-item"><span>Днів у вибірці</span>${pair(prev.days, cur.days, 0, null)}</div>
+    <div class="chg-item"><span>База ₴/км (чист)</span>${pair(prev.base, cur.base, 2, true)}</div>
+    <div class="chg-item"><span>Чистий разом</span>${pair(prev.net, cur.net, 0, true)} грн</div>`;
+
+  const btRows = cur.modes
+    .map((m) => {
+      const p =
+        prev.modes.find((x) => x.id === m.id) ??
+        { pass: m.pass, missedGood: m.missedGood, npkPass: m.npkPass };
+      return `<tr>
+        <td>${esc(m.name)}</td>
+        <td class="num">${pair(p.pass, m.pass, 0, null)}</td>
+        <td class="num">${pair(p.missedGood, m.missedGood, 0, false)}</td>
+        <td class="num">${pair(p.npkPass, m.npkPass, 2, true)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `
+    <div class="panel chg-panel">
+      <h3>🔁 Що змінилось з минулого запуску</h3>
+      <div class="chg-grid">${items}</div>
+      ${thrNote}
+      <table class="mini chg-bt">
+        <thead><tr><th>Режим</th><th class="num">Пройшло</th>
+          <th class="num">Прибуткових відсічено</th><th class="num">Чист/км після</th></tr></thead>
+        <tbody>${btRows}</tbody>
+      </table>
+      <p class="hint">Порівняння з попереднім <code>npm run generate</code> ·
+        попередній стан від ${esc(new Date(prev.at).toLocaleString("uk-UA"))}.</p>
+    </div>`;
+}
+
+function render(data: Data, prev: Snapshot | null, cur: Snapshot): string {
   const s = data.settings;
   const rows = enrich(data);
   const thr = s.threshold_net_per_km;
@@ -583,6 +663,20 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 tr.mode-cut{opacity:.32}
 tr.mode-pass{background:#f0fdf4}
 tr.mode-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
+/* Дифф-панель «що змінилось» */
+.chg-panel{border-left:4px solid var(--accent)}
+.chg-empty{font-size:13px;color:var(--muted);margin:0}
+.chg-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.chg-item{background:#f9fafb;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.chg-item span{display:block;color:var(--muted);font-size:11.5px;margin-bottom:3px}
+.chg-item b{font-size:15px;color:var(--accent)}
+.chg-item i{font-style:normal;font-size:12px;font-weight:700;margin-left:4px}
+.chg-up{color:var(--good)} .chg-down{color:var(--bad)} .chg-neutral{color:var(--accent)}
+.chg-note{font-size:13px;background:#f9fafb;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.chg-note-warn{background:var(--warn-bg);border-color:#f4d58a}
+.chg-note ul{margin:6px 0 0;padding-left:18px}
+.chg-bt th,.chg-bt td{white-space:nowrap}
+.chg-bt td.num,.chg-bt th.num{text-align:right}
 .worst{list-style:none;margin:0;padding:0}
 .worst li{display:grid;grid-template-columns:52px 1fr;grid-template-areas:"npk info" "npk route";
   gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
@@ -645,6 +739,7 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   <div class="cards">${kpiCards(rows)}</div>
   ${goldenBanner(s)}
   ${autopilotModes(rows, s)}
+  ${changesPanel(prev, cur)}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
   ${dailyTrend(rows)}
   ${tripsTable(rows)}
@@ -773,7 +868,10 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
 
 const inPath = process.argv[2] ?? "data.json";
 const outPath = process.argv[3] ?? "report.html";
-writeFileSync(outPath, render(inPath), "utf8");
-const n = loadData(inPath).trips.length;
-console.log(`OK: ${n} поїздок → ${outPath}`);
+const data = loadData(inPath);
+const cur = buildSnapshot(data);
+const prev = loadSnapshot();
+writeFileSync(outPath, render(data, prev, cur), "utf8");
+saveSnapshot(cur); // базлайн для наступного порівняння
+console.log(`OK: ${data.trips.length} поїздок → ${outPath}`);
 

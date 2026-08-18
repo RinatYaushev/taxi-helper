@@ -75,6 +75,12 @@ netPerKm   = net / distance
 рахує `min_price_km_city = round(minGrossPerKm × price_km_mult)`. Тож пороги ₴/км
 **перераховуються** зі свіжих `settings` (газ/комісія), а бектест — на всіх `trips`.
 
+> Важливо: **пороги ₴/км залежать від витрат (settings), а не від к-сті поїздок.**
+> Додавання `trips` змінює лише **бектест** (скільки пройде, ₴/км після фільтра,
+> «прибуткових відсічено», база). `generate` пише знімок у `.report-state.json`
+> (gitignore) і показує в звіті панель **«Що змінилось з минулого запуску»**
+> (`lib.ts::buildSnapshot` + `changesPanel` у `generate.ts`).
+
 **Золоте правило** (мін. валова ціна): `minGross = (threshold + breakeven) / (1 - commission)`, де
 `breakeven = fuelPerKm*(1+empty_run_coef)`. Наразі ≈ **28 грн/км**.
 

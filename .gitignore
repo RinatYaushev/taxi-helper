@@ -17,6 +17,7 @@ venv/
 # Згенеровані артефакти
 *.xlsx
 report.html
+.report-state.json
 
 # Тимчасові файли OCR
 /tmp/ocr.txt
