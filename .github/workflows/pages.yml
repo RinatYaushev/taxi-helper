@@ -1,5 +1,6 @@
 name: Publish report to GitHub Pages
 
+# Публікує самодостатній HTML-звіт на GitHub Pages (репозиторій публічний).
 on:
   push:
     branches: [main]
@@ -60,4 +61,5 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
 
