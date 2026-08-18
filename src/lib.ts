@@ -26,6 +26,23 @@ export function minGrossPerKm(s: Settings): number {
   return (s.threshold_net_per_km + breakeven(s)) / (1 - cashRate);
 }
 
+/**
+ * Порахувати пороги ₴/км для кожного режиму з «золотого правила».
+ * Так значення фільтрів **перераховуються** щоразу зі свіжих settings
+ * (ціна газу, комісія, поріг), а не лишаються захардкодженими.
+ */
+export function deriveModes(s: Settings): import("./types.ts").Mode[] {
+  const g = minGrossPerKm(s);
+  return s.modes.map((m) => ({
+    ...m,
+    min_price_km_city: Math.round(g * m.price_km_mult),
+    min_price_km_suburb:
+      m.price_km_suburb_mult != null
+        ? Math.round(g * m.price_km_suburb_mult)
+        : undefined,
+  }));
+}
+
 /** Порахувати газ, комісію, чистий, грн/км і рекомендацію для однієї поїздки */
 export function compute(t: Trip, s: Settings): Computed {
   const amount = Number(t.amount);
@@ -55,14 +72,6 @@ export function enrich(data: Data): Row[] {
   return data.trips.map((t) => ({ ...t, ...compute(t, data.settings) }));
 }
 
-export function avg(values: number[]): number {
-  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
-}
-
-export function round(n: number, d = 2): number {
-  const p = 10 ** d;
-  return Math.round(n * p) / p;
-}
 
 export interface GroupStat {
   n: number;

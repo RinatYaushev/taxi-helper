@@ -14,6 +14,35 @@ export interface Filters {
   autopilot_min_order: number;
 }
 
+/** Пресет фільтра «Автопілота» під певний рівень попиту. */
+export interface Mode {
+  id: string;
+  name: string;
+  icon: string;
+  /** Завжди активний фоновий фільтр (короткі поруч). */
+  always_on: boolean;
+  /** Коли вмикати цей режим (людською мовою). */
+  when: string;
+  /** "Простий" | "Складний" */
+  tariff: string;
+  min_order: number;
+  /** Множник до «золотого правила» (minGrossPerKm) для міста.
+   *  Порогова ₴/км перераховується з формул: round(minGrossPerKm × price_km_mult). */
+  price_km_mult: number;
+  /** Множник для передмістя. Якщо відсутній — тупики off. */
+  price_km_suburb_mult?: number;
+  /** Обчислюється в deriveModes() з price_km_mult. */
+  min_price_km_city?: number;
+  /** Обчислюється в deriveModes() з price_km_suburb_mult; інакше тупики off. */
+  min_price_km_suburb?: number;
+  max_pickup_km: number;
+  /** Верхня межа дистанції поїздки (для обігу в пік); 0/відсутнє — без межі. */
+  max_km?: number;
+  /** Км у «мінімалці» для складного тарифу. */
+  min_km_in_minimum?: number;
+  city_only: boolean;
+}
+
 export interface Settings {
   gas_consumption_l_100km: number;
   gas_price_per_l: number;
@@ -23,6 +52,7 @@ export interface Settings {
   threshold_net_per_km: number;
   marginal_net_per_km: number;
   filters: Filters;
+  modes: Mode[];
   dead_end_areas: string[];
   live_areas: string[];
 }
@@ -32,6 +62,8 @@ export interface Trip {
   payment: Payment;
   amount: number;
   distance: number;
+  /** Відстань подачі (км) до клієнта. Опційно: старі поїздки без цих даних. */
+  pickup_km?: number;
   from: string;
   to: string;
   zone: Zone;

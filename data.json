@@ -17,6 +17,61 @@
       "long_price_km_mult": 1.4,
       "autopilot_min_order": 90
     },
+    "modes": [
+      {
+        "id": "short",
+        "name": "Короткі поруч",
+        "icon": "🟢",
+        "always_on": true,
+        "when": "Завжди активний — фоновий фільтр. Короткі поїздки дають найвищу ₴/км, але тільки коли клієнт майже поруч (порожняк не з'їдає маржу).",
+        "tariff": "Простий",
+        "min_order": 80,
+        "price_km_mult": 1.08,
+        "max_pickup_km": 1.5,
+        "max_km": 3,
+        "city_only": true
+      },
+      {
+        "id": "rush",
+        "name": "Ажіотаж",
+        "icon": "🔴",
+        "always_on": false,
+        "when": "Піковий/високий попит (буд. 17–19, події, негода). Максимум обігу: жорсткіша планка ₴/км, короткі-середні поїздки, тупики й довгі — ні.",
+        "tariff": "Складний",
+        "min_order": 90,
+        "price_km_mult": 1.08,
+        "max_pickup_km": 3,
+        "max_km": 8,
+        "min_km_in_minimum": 2,
+        "city_only": true
+      },
+      {
+        "id": "normal",
+        "name": "Норма",
+        "icon": "🔵",
+        "always_on": false,
+        "when": "Звичайний трафік. Базові пороги із «золотого правила»: місто ≥ 28, передмістя беремо лише за високу ₴/км.",
+        "tariff": "Складний",
+        "min_order": 90,
+        "price_km_mult": 1.0,
+        "price_km_suburb_mult": 1.15,
+        "max_pickup_km": 3,
+        "min_km_in_minimum": 2,
+        "city_only": false
+      },
+      {
+        "id": "calm",
+        "name": "Затишшя",
+        "icon": "🟡",
+        "always_on": false,
+        "when": "Немає попиту / довгі простої. Нижча планка (аби не стояти), довша подача прийнятна, але без глухих кутів — вони єдине, що реально збиткове.",
+        "tariff": "Простий",
+        "min_order": 80,
+        "price_km_mult": 0.575,
+        "max_pickup_km": 5,
+        "city_only": true
+      }
+    ],
     "dead_end_areas": [
       "Стрижавка",
       "Сабарів",

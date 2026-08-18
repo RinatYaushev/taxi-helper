@@ -22,10 +22,12 @@
 Схема поїздки:
 ```json
 { "datetime": "16.08 19:53", "payment": "Безготівка", "amount": 185,
-  "distance": 6.23, "from": "...", "to": "...", "zone": "Місто" }
+  "distance": 6.23, "pickup_km": 1.2, "from": "...", "to": "...", "zone": "Місто" }
 ```
 - `payment`: `Готівка` | `Безготівка` | `Комбінована`
 - `zone`: `Місто` | `Глухий кут` — визначається **за адресою призначення** (`to`).
+- `pickup_km` *(опційно)*: відстань подачі до клієнта, км. Старі поїздки без цих
+  даних; у бектесті режимів подача перевіряється лише коли `pickup_km` заданий.
 
 ## Ключові команди
 
@@ -67,6 +69,11 @@ net        = amount - commission - gas
 netPerKm   = net / distance
 ```
 Рекомендація: `netPerKm ≥ threshold_net_per_km` → **бери**; `≥ marginal_net_per_km` → **думай**; інакше **пропускай**.
+
+**Пороги режимів «Автопілота»** (`settings.modes`) не хардкодяться: кожен режим
+задає `price_km_mult` (і опційно `price_km_suburb_mult`), а `lib.ts::deriveModes`
+рахує `min_price_km_city = round(minGrossPerKm × price_km_mult)`. Тож пороги ₴/км
+**перераховуються** зі свіжих `settings` (газ/комісія), а бектест — на всіх `trips`.
 
 **Золоте правило** (мін. валова ціна): `minGross = (threshold + breakeven) / (1 - commission)`, де
 `breakeven = fuelPerKm*(1+empty_run_coef)`. Наразі ≈ **28 грн/км**.

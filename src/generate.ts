@@ -6,9 +6,10 @@ import {
   fuelPerKm,
   breakeven,
   minGrossPerKm,
+  deriveModes,
   groupStats,
 } from "./lib.ts";
-import type { Row, Settings } from "./types.ts";
+import type { Row, Settings, Mode } from "./types.ts";
 
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) =>
@@ -357,6 +358,124 @@ function worstList(rows: Row[]): string {
     </div>`;
 }
 
+function npkOf(rs: Row[]): number {
+  const km = rs.reduce((a, r) => a + r.distance, 0);
+  return km ? rs.reduce((a, r) => a + r.net, 0) / km : 0;
+}
+
+// Предикат «пройде замовлення крізь режим?». Подача перевіряється лише коли
+// вона відома (pickup_km); суму, дистанцію, зону й ₴/км (grossPerKm) — завжди.
+function modePass(r: Row, m: Mode): boolean {
+  if (r.amount < m.min_order) return false;
+  if (m.max_km && r.distance > m.max_km) return false;
+  if (r.pickup_km != null && r.pickup_km > m.max_pickup_km) return false;
+  if (r.zone === "Місто") return r.grossPerKm >= (m.min_price_km_city ?? Infinity);
+  // Глухий кут:
+  if (m.city_only || m.min_price_km_suburb == null) return false;
+  return r.grossPerKm >= m.min_price_km_suburb;
+}
+
+function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
+  const pass = rows.filter((r) => modePass(r, m));
+  const cut = rows.filter((r) => !modePass(r, m));
+  const below = pass.filter((r) => r.netPerKm < thr).length;
+  const delta = npkOf(pass) - base;
+  return `<div class="fx-bt">
+    <div class="fx-bt-row"><span>Пройшло на історії</span>
+      <b>${pass.length}/${rows.length}</b></div>
+    <div class="fx-bt-row"><span>Чист/км після фільтра</span>
+      <b class="v-ok">${f1(npkOf(pass))}</b>
+      <span class="fx-delta">(база ${f1(base)}, ${delta >= 0 ? "+" : ""}${f1(delta)})</span></div>
+    <div class="fx-bt-row"><span>Відсічено</span>
+      <b>${cut.length}</b>
+      <span class="fx-delta">сер. <b class="v-low">${f1(npkOf(cut))}</b> ₴/км</span></div>
+    <div class="fx-bt-row"><span>З пройдених нижче порогу (${thr})</span>
+      <b class="${below ? "v-low" : "v-ok"}">${below}</b></div>
+  </div>`;
+}
+
+function modeFields(m: Mode): string {
+  const row = (label: string, value: string): string =>
+    `<tr><td>${label}</td><td><b>${value}</b></td></tr>`;
+  const out: string[] = [];
+  out.push(row("Тариф", m.tariff));
+  out.push(row("Мін. вартість", `${m.min_order} грн`));
+  if (m.tariff === "Складний" && m.min_km_in_minimum != null) {
+    out.push(row("Км у мінімалці", String(m.min_km_in_minimum)));
+  }
+  out.push(row("Мін. ціна ₴/км (місто)", String(m.min_price_km_city ?? "—")));
+  if (m.min_price_km_suburb != null) {
+    out.push(row("Мін. ціна ₴/км (передмістя)", String(m.min_price_km_suburb)));
+  } else {
+    out.push(row("Передмістя / тупики", "❌ вимкнути"));
+  }
+  out.push(row("Відстань подачі", `≤ ${f1(m.max_pickup_km)} км`));
+  if (m.max_km) out.push(row("Тільки поїздки", `≤ ${m.max_km} км`));
+  if (m.city_only) out.push(row("Лише по місту", "✓ увімкнути"));
+  return out.join("");
+}
+
+// Головна секція: режими фільтрів «Автопілота» під рівень попиту.
+function autopilotModes(rows: Row[], s: Settings): string {
+  const base = npkOf(rows);
+  const thr = s.threshold_net_per_km;
+  const modes = deriveModes(s); // пороги ₴/км перераховані зі свіжих формул
+  const always = modes.filter((m) => m.always_on);
+  const switchable = modes.filter((m) => !m.always_on);
+
+  const alwaysCards = always
+    .map(
+      (m) => `
+      <div class="fx-card fx-always">
+        <div class="fx-title">${m.icon} ${esc(m.name)}
+          <span class="fx-badge fx-badge-on">завжди активний</span></div>
+        <div class="fx-sub">${esc(m.when)}</div>
+        <table class="fx-fields">${modeFields(m)}</table>
+        ${modeBacktest(rows, m, base, thr)}
+      </div>`,
+    )
+    .join("");
+
+  const switchCards = switchable
+    .map(
+      (m) => `
+      <div class="fx-card">
+        <div class="fx-title">${m.icon} ${esc(m.name)}
+          <span class="fx-badge">${esc(m.tariff)}</span></div>
+        <div class="fx-sub">${esc(m.when)}</div>
+        <table class="fx-fields">${modeFields(m)}</table>
+        ${modeBacktest(rows, m, base, thr)}
+      </div>`,
+    )
+    .join("");
+
+  const deadTags = s.dead_end_areas
+    .map((a) => `<span class="tag tag-dead">${esc(a)}</span>`)
+    .join("");
+
+  return `
+    <div class="panel fx-panel fx-hero">
+      <div class="fx-hero-head">
+        <h3>🎯 Готові фільтри для Автопілота</h3>
+        <span class="hint">значення вписуй у форму «Новий фільтр» · перемикай режим вручну під ситуацію</span>
+      </div>
+      <p class="fx-intro">Ідея: <b>мінімум простою</b>. Один фільтр працює <b>завжди</b>,
+        а решту <b>перемикаєш сам</b> під попит — у пік жорсткіше й коротше (обіг),
+        у затишшя нижча планка й довша подача (аби не стояти).
+        Пороги ₴/км рахуються із «золотого правила» (ціна газу + комісія) і
+        <b>перераховуються автоматично</b>: зміниш ціну газу — оновляться пороги,
+        додаси поїздки — оновиться бектест. Зараз база без фільтра —
+        <b>${f1(base)}</b> ₴/км чистими на ${rows.length} поїздках.</p>
+      <div class="fx-always-wrap">${alwaysCards}</div>
+      <div class="fx-switch-title">Перемикай під попит:</div>
+      <div class="grid3 fx-grid">${switchCards}</div>
+      <div class="fx-note">
+        <b>Куди → Сектори призначення:</b> у whitelist додавай лише живі райони.
+        А ці <b>не</b> додавай (глухі кути): ${deadTags}
+      </div>
+    </div>`;
+}
+
 function render(inPath: string): string {
   const data = loadData(inPath);
   const s = data.settings;
@@ -433,6 +552,34 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .settings-list span{color:var(--muted)}
 .tags{margin-top:10px}
 .tags-title{font-size:12px;color:var(--muted);margin-bottom:4px}
+/* Готові фільтри */
+.fx-hero{border:2px solid var(--accent);border-radius:18px;
+  background:linear-gradient(180deg,#eef4fc 0,#fff 90px);
+  box-shadow:0 6px 24px rgba(46,90,136,.14);margin-bottom:22px;padding:20px 22px}
+.fx-hero-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.fx-hero-head h3{margin:0;font-size:19px;color:var(--accent)}
+.fx-always-wrap{margin-bottom:14px}
+.fx-always{border:2px solid var(--good);background:linear-gradient(135deg,#ecfdf3,#f7fee7)}
+.fx-badge-on{background:var(--good)}
+.fx-switch-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);margin:4px 0 10px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.grid3.fx-grid{margin-bottom:0}
+.fx-intro{font-size:13.5px;margin:0 0 14px;color:var(--ink)}
+.fx-grid{margin-bottom:0}
+.fx-card{background:#f9fafb;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.fx-title{font-size:15px;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fx-badge{font-size:11px;font-weight:600;background:var(--accent);color:#fff;padding:2px 8px;border-radius:999px}
+.fx-sub{font-size:12.5px;color:var(--muted);margin:4px 0 10px}
+.fx-fields{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px}
+.fx-fields td{padding:6px 8px;border-bottom:1px solid var(--line)}
+.fx-fields td:first-child{color:var(--muted)}
+.fx-fields td:last-child{text-align:right;white-space:nowrap}
+.fx-bt{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px}
+.fx-bt-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0}
+.fx-bt-row span:first-child{color:var(--muted)}
+.fx-delta{color:var(--muted);font-weight:400}
+.fx-note{margin-top:14px;font-size:12.5px;color:var(--ink);border-top:1px solid var(--line);padding-top:12px}
 .worst{list-style:none;margin:0;padding:0}
 .worst li{display:grid;grid-template-columns:52px 1fr;grid-template-areas:"npk info" "npk route";
   gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
@@ -474,7 +621,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
   font-size:13px;cursor:pointer;color:var(--ink);white-space:nowrap}
 .dropdown-menu button:hover{background:#f3f4f6}
 footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
-@media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}}
+@media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}}
 @media print{
   body{background:#fff}
   .wrap{max-width:none;padding:0}
@@ -494,6 +641,7 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   </header>
   <div class="cards">${kpiCards(rows)}</div>
   ${goldenBanner(s)}
+  ${autopilotModes(rows, s)}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
   ${dailyTrend(rows)}
   ${autopilotBox(s)}
