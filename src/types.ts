@@ -44,6 +44,8 @@ export interface Settings {
   modes: Mode[];
   dead_end_areas: string[];
   live_areas: string[];
+  /** Далекі міста/смт (міжміський дальняк) — це НЕ глухий кут, окрема логіка. */
+  long_haul_areas: string[];
 }
 
 export interface Trip {
@@ -73,6 +75,8 @@ export interface Computed {
   netPerKm: number;
   rating: "OK" | "погана";
   rec: Recommendation;
+  /** Призначення в межах дальняку (long_haul_areas) — міжміський, окрема логіка. */
+  longHaul: boolean;
 }
 
 export type Row = Trip & Computed;

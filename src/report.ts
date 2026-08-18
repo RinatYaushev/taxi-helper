@@ -36,8 +36,9 @@ block("Довга (7-12 км)", rows.filter((r) => r.distance >= 7 && r.distance
 block("Дуже довга (12+ км)", rows.filter((r) => r.distance >= 12));
 console.log("-".repeat(92));
 console.log("ЗА ЗОНОЮ ПРИЗНАЧЕННЯ");
-block("Місто", rows.filter((r) => r.zone === "Місто"));
-block("Глухий кут", rows.filter((r) => r.zone === "Глухий кут"));
+block("Місто", rows.filter((r) => r.zone === "Місто" && !r.longHaul));
+block("Глухий кут", rows.filter((r) => r.zone === "Глухий кут" && !r.longHaul));
+block("Дальняк (міжміс.)", rows.filter((r) => r.longHaul));
 console.log("-".repeat(92));
 console.log("ЗА ГОДИНОЮ");
 const buckets: [number, number, string][] = [

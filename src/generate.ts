@@ -191,12 +191,13 @@ function tripsTable(rows: Row[]): string {
   const body = rows
     .map((r) => {
       const barW = Math.max(0, Math.min(100, (r.netPerKm / maxNpk) * 100));
-      const zoneTag =
-        r.zone === "Глухий кут"
+      const zoneTag = r.longHaul
+        ? `<span class="tag tag-haul">Дальняк</span>`
+        : r.zone === "Глухий кут"
           ? `<span class="tag tag-dead">Глухий кут</span>`
           : `<span class="tag tag-city">Місто</span>`;
       return `
-      <tr data-rec="${r.rec}" data-amount="${r.amount}" data-dist="${r.distance}" data-gross="${f1(r.grossPerKm)}" data-zone="${esc(r.zone)}"${r.pickup_km != null ? ` data-pickup="${r.pickup_km}"` : ""}>
+      <tr data-rec="${r.rec}" data-amount="${r.amount}" data-dist="${r.distance}" data-gross="${f1(r.grossPerKm)}" data-zone="${esc(r.zone)}" data-longhaul="${r.longHaul ? 1 : 0}"${r.pickup_km != null ? ` data-pickup="${r.pickup_km}"` : ""}>
         <td class="nowrap">${esc(r.datetime)}</td>
         <td>${esc(r.payment)}</td>
         <td class="num">${money(r.amount)}</td>
@@ -285,8 +286,9 @@ function breakdowns(rows: Row[], thr: number): string {
     ["Дуже довга (12+ км)", rows.filter((r) => r.distance >= 12)],
   ]);
   const zone = section("За зоною", [
-    ["Місто", rows.filter((r) => r.zone === "Місто")],
-    ["Глухий кут", rows.filter((r) => r.zone === "Глухий кут")],
+    ["Місто", rows.filter((r) => r.zone === "Місто" && !r.longHaul)],
+    ["Глухий кут", rows.filter((r) => r.zone === "Глухий кут" && !r.longHaul)],
+    ["Дальняк (міжміс.)", rows.filter((r) => r.longHaul)],
   ]);
   const hour = section("За годиною", [
     ["до 17:00", rows.filter((r) => hourOf(r) < 17)],
@@ -373,8 +375,10 @@ function modeFields(m: Mode): string {
   return `
     <div class="fx-group-title">⚙️ Вписати в Автопілот</div>
     <table class="fx-fields">${auto.join("")}</table>
-    <div class="fx-group-title">✋ Брати вручну, якщо сума÷км ≥</div>
-    <table class="fx-fields">${manual.join("")}</table>`;
+    <div class="fx-manual">
+      <div class="fx-group-title">✋ Брати вручну, якщо сума÷км ≥</div>
+      <table class="fx-fields fx-fields-last">${manual.join("")}</table>
+    </div>`;
 }
 
 // Головна секція: режими фільтрів «Автопілота» під рівень попиту.
@@ -419,6 +423,9 @@ function autopilotModes(rows: Row[], s: Settings): string {
   const liveTags = s.live_areas
     .map((a) => `<span class="tag tag-live">${esc(a)}</span>`)
     .join("");
+  const haulTags = (s.long_haul_areas ?? [])
+    .map((a) => `<span class="tag tag-haul">${esc(a)}</span>`)
+    .join("");
 
   const days = new Set(rows.map((r) => r.datetime.split(" ")[0])).size;
   const smallSample = rows.length < 100 || days < 4;
@@ -449,7 +456,8 @@ function autopilotModes(rows: Row[], s: Settings): string {
       <div class="grid3 fx-grid">${switchCards}</div>
       <div class="fx-note">
         <b>Сектори призначення (whitelist):</b> додавай живі райони — ${liveTags}<br>
-        <b>НЕ додавай</b> глухі кути (єдине, що реально збиткове): ${deadTags}
+        <b>НЕ додавай</b> глухі кути (єдине, що реально збиткове): ${deadTags}<br>
+        <b>🚫 Дальняк</b> (міжміський — інша економіка, Автопілот не бере автоматично): ${haulTags}
       </div>
       <script>window.__MODES__=${modesJson};</script>
     </div>`;
@@ -610,6 +618,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .tag-dead{background:#ffedd5;color:#c2410c}
 .tag-live{background:#e0f2fe;color:#0369a1}
 .tag-city{background:#f3f4f6;color:#4b5563}
+.tag-haul{background:#ede9fe;color:#6d28d9}
 .npk{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px}
 .npk-bar{position:absolute;left:0;top:50%;transform:translateY(-50%);height:16px;background:#dbeafe;border-radius:4px;z-index:0}
 .npk span{position:relative;z-index:1}
@@ -640,7 +649,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .grid3.fx-grid{margin-bottom:0}
 .fx-intro{font-size:13.5px;margin:0 0 14px;color:var(--ink)}
 .fx-grid{margin-bottom:0}
-.fx-card{background:#f9fafb;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.fx-card{background:#f9fafb;border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column}
 .fx-title{font-size:15px;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .fx-badge{font-size:11px;font-weight:600;background:var(--accent);color:#fff;padding:2px 8px;border-radius:999px}
 .fx-sub{font-size:12.5px;color:var(--muted);margin:4px 0 10px}
@@ -655,6 +664,8 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-note{margin-top:14px;font-size:12.5px;color:var(--ink);border-top:1px solid var(--line);padding-top:12px}
 .fx-group-title{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 3px}
 .fx-group-title:first-child{margin-top:0}
+.fx-manual{margin-top:auto;padding-top:6px}
+.fx-fields-last{margin-bottom:12px}
 .fx-warn{background:var(--warn-bg);border:1px solid #f4d58a;border-radius:10px;padding:9px 12px;font-size:12.5px;margin:0 0 14px}
 .fx-preview{margin-top:10px;width:100%;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer}
 .fx-preview:hover{background:#eef4fc}
@@ -836,6 +847,7 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
   function jsPass(m,tr){
     var amount=+tr.dataset.amount, dist=+tr.dataset.dist, gross=+tr.dataset.gross,
         zone=tr.dataset.zone, pickup=tr.dataset.pickup;
+    if(tr.dataset.longhaul==="1")return false;
     if(amount<m.min_order)return false;
     if(m.max_km&&dist>m.max_km)return false;
     if(pickup!=null&&pickup!==""&&(+pickup)>m.max_pickup_km)return false;

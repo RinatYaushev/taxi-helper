@@ -43,6 +43,36 @@ export function deriveModes(s: Settings): import("./types.ts").Mode[] {
   }));
 }
 
+/** Локалітети призначення — текст у дужках, де за конвенцією стоїть село/місто
+ *  (напр. "Зарічна (Стрижавка), 2" → "Стрижавка"). Вулиця/заклад поза дужками
+ *  ігноруються, тож "Бар Бюро (Оводова, 62а)" НЕ вважається містом Бар. */
+function localities(addr: string): string {
+  const out: string[] = [];
+  const re = /\(([^)]*)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(addr)) !== null) out.push(m[1]);
+  return out.join(" ; ").toLowerCase();
+}
+
+/** Чи згадується в локалітеті адреси якийсь із районів списку (ціле слово). */
+export function inArea(text: string, areas: string[]): boolean {
+  const scope = localities(text);
+  if (!scope) return false;
+  const isLetter = (ch: string): boolean => /[a-zа-яіїєґ]/.test(ch);
+  return areas.some((a) => {
+    const n = a.toLowerCase();
+    let from = 0;
+    let idx: number;
+    while ((idx = scope.indexOf(n, from)) !== -1) {
+      const before = idx > 0 ? scope[idx - 1] : "";
+      const after = idx + n.length < scope.length ? scope[idx + n.length] : "";
+      if (!isLetter(before) && !isLetter(after)) return true;
+      from = idx + 1;
+    }
+    return false;
+  });
+}
+
 /** Порахувати газ, комісію, чистий, грн/км і рекомендацію для однієї поїздки */
 export function compute(t: Trip, s: Settings): Computed {
   const amount = Number(t.amount);
@@ -65,7 +95,9 @@ export function compute(t: Trip, s: Settings): Computed {
       : netPerKm >= marginal
         ? "думай"
         : "пропускай";
-  return { gas, commission, net, grossPerKm, netPerKm, rating, rec };
+  // Дальняк визначаємо за призначенням (to); список — settings.long_haul_areas.
+  const longHaul = inArea(t.to, s.long_haul_areas ?? []);
+  return { gas, commission, net, grossPerKm, netPerKm, rating, rec, longHaul };
 }
 
 export function enrich(data: Data): Row[] {
@@ -111,6 +143,7 @@ export function npkOf(rs: Row[]): number {
  * `m` має бути похідним режимом із deriveModes() (пороги вже пораховані).
  */
 export function modePass(r: Row, m: Mode): boolean {
+  if (r.longHaul) return false; // дальняк (міжміський) — окрема логіка, Автопілот off
   if (r.amount < m.min_order) return false;
   if (m.max_km && r.distance > m.max_km) return false;
   if (r.pickup_km != null && r.pickup_km > m.max_pickup_km) return false;
