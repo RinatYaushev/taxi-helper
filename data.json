@@ -14,6 +14,10 @@
     "target_net_per_hour": 200,
     "time_model": {
       "avg_speed_kmh": 24,
+      "avg_speed_by_zone": {
+        "Місто": 22,
+        "Глухий кут": 34
+      },
       "order_overhead_min": 4
     },
     "modes": [

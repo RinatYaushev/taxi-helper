@@ -26,6 +26,15 @@ export function emptyCoef(t: Trip, s: Settings): number {
   return emptyCoefZone(t.zone, s);
 }
 
+/** Середня швидкість для зони (місто повільніше, села швидше), fallback — загальна. */
+export function avgSpeedZone(zone: Zone, s: Settings): number {
+  return (
+    s.time_model?.avg_speed_by_zone?.[zone] ??
+    s.time_model?.avg_speed_kmh ??
+    24
+  );
+}
+
 /** Базова планка ₴/год для афінного порогу. */
 export function baseTargetPh(s: Settings): number {
   return s.target_net_per_hour ?? 200;
@@ -38,7 +47,7 @@ export function baseTargetPh(s: Settings): number {
  *   B = (1+порожняк) × (targetPh/швидкість + паливо/км)/(1−c) — грн/км
  */
 export function fareAB(s: Settings, targetPh: number, zone: Zone): { a: number; b: number } {
-  const speed = s.time_model?.avg_speed_kmh ?? 24;
+  const speed = avgSpeedZone(zone, s);
   const overhead = s.time_model?.order_overhead_min ?? 4;
   const c = s.commission_uklon_pct / 100;
   const k = 1 + emptyCoefZone(zone, s);
@@ -58,10 +67,21 @@ export function breakeven(s: Settings): number {
   return fuelPerKm(s) * (1 + s.empty_run_coef);
 }
 
+/** Беззбитковість для зони (порожняк за зоною), грн/км */
+export function breakevenZone(s: Settings, zone: Zone): number {
+  return fuelPerKm(s) * (1 + emptyCoefZone(zone, s));
+}
+
 /** Мін. валова ціна (золоте правило), грн/км */
 export function minGrossPerKm(s: Settings): number {
   const cashRate = s.commission_uklon_pct / 100;
   return (s.threshold_net_per_km + breakeven(s)) / (1 - cashRate);
+}
+
+/** Мін. валова ціна для зони (еквів. ₴/км з урахуванням порожняку зони). */
+export function minGrossPerKmZone(s: Settings, zone: Zone): number {
+  const cashRate = s.commission_uklon_pct / 100;
+  return (s.threshold_net_per_km + breakevenZone(s, zone)) / (1 - cashRate);
 }
 
 /**
@@ -70,7 +90,8 @@ export function minGrossPerKm(s: Settings): number {
  * (ціна газу, комісія, поріг), а не лишаються захардкодженими.
  */
 export function deriveModes(s: Settings): import("./types.ts").Mode[] {
-  const g = minGrossPerKm(s);
+  const gCity = minGrossPerKmZone(s, "Місто");
+  const gDead = minGrossPerKmZone(s, "Глухий кут");
   const basePh = baseTargetPh(s);
   return s.modes.map((m) => {
     const targetPh = Math.round(basePh * m.price_km_mult);
@@ -79,10 +100,10 @@ export function deriveModes(s: Settings): import("./types.ts").Mode[] {
     const suburbAllowed = !m.city_only && m.price_km_suburb_mult != null;
     return {
       ...m,
-      min_price_km_city: Math.round(g * m.price_km_mult),
+      min_price_km_city: Math.round(gCity * m.price_km_mult),
       min_price_km_suburb:
         m.price_km_suburb_mult != null
-          ? Math.round(g * m.price_km_suburb_mult)
+          ? Math.round(gDead * m.price_km_suburb_mult)
           : undefined,
       target_ph: targetPh,
       fare_a: Math.round(city.a),
@@ -135,9 +156,9 @@ export function compute(t: Trip, s: Settings): Computed {
   const net = amount - commission - gas;
   const grossPerKm = dist ? amount / dist : 0;
   const netPerKm = dist ? net / dist : 0;
-  // Час: подача (якщо відома) + пробіг + порожняк назад, за середньою швидкістю,
+  // Час: подача (якщо відома) + пробіг + порожняк назад, за зонною швидкістю,
   // плюс фікс. накладні на замовлення (пошук/чекання/передача/оплата).
-  const speed = s.time_model?.avg_speed_kmh ?? 24;
+  const speed = avgSpeedZone(t.zone, s);
   const overhead = s.time_model?.order_overhead_min ?? 4;
   const pickup = Number(t.pickup_km ?? 0);
   const movingKm = pickup + dist * (1 + emptyCoef(t, s));

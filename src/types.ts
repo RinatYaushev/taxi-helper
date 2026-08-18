@@ -57,9 +57,12 @@ export interface Settings {
    *  Режим множить її на price_km_mult (пік вище, затишшя нижче). */
   target_net_per_hour?: number;
   /** Модель часу для метрики ₴/год. Час = order_overhead_min +
-   *  (подача + пробіг + порожняк назад)/avg_speed_kmh. Крутилки, тюняться. */
+   *  (подача + пробіг + порожняк назад)/швидкість. Крутилки, тюняться. */
   time_model?: {
+    /** Fallback-швидкість, якщо зони немає в avg_speed_by_zone. */
     avg_speed_kmh: number;
+    /** Швидкість за зоною: місто повільніше (світлофори), села швидше. */
+    avg_speed_by_zone?: Partial<Record<Zone, number>>;
     order_overhead_min: number;
   };
   modes: Mode[];
