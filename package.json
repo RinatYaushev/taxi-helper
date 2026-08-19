@@ -7,6 +7,7 @@
     "generate": "node src/generate.ts",
     "analyze": "node src/analyze.ts",
     "report": "node src/report.ts",
+    "parse": "node src/parseOrders.ts",
     "update-pay": "node src/updatePay.ts"
   },
   "dependencies": {
