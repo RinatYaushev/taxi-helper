@@ -13,8 +13,8 @@
     "marginal_net_per_km": 10,
     "target_net_per_hour": 200,
     "uklon_fare": {
-      "base": 81,
-      "per_km": 16.4
+      "base": 80.06,
+      "per_km": 17.16
     },
     "time_model": {
       "avg_speed_kmh": 24,
@@ -790,8 +790,8 @@
       "amount": 210,
       "distance": 6.36,
       "from": "Олександра Соловйова Вулиця (Вінниця), 3",
-      "to": "Центральний",
-      "zone": "Місто"
+      "to": "Музей-садиба Пирогова, Вихід Центральний",
+      "zone": "Глухий кут"
     },
     {
       "datetime": "09.08 17:36",
