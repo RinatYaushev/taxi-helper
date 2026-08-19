@@ -93,11 +93,22 @@ export function deriveModes(s: Settings): import("./types.ts").Mode[] {
   const gCity = minGrossPerKmZone(s, "Місто");
   const gDead = minGrossPerKmZone(s, "Глухий кут");
   const basePh = baseTargetPh(s);
+  const uf = s.uklon_fare ?? { base: 81, per_km: 16.4 };
+  // Дистанція, де тариф Uklon (base + per_km×d) перестає покривати афінний
+  // поріг (a + B×d). Якщо Uklon платить достатньо/км (per_km ≥ B) або перетин
+  // за межами компактної Вінниці (>15 км) — межі фактично немає (undefined).
+  const econCap = (a: number, B: number): number | undefined => {
+    if (uf.per_km >= B) return undefined;
+    const d = (a - uf.base) / (uf.per_km - B);
+    if (!isFinite(d) || d <= 0 || d > 15) return undefined;
+    return Math.round(d);
+  };
   return s.modes.map((m) => {
     const targetPh = Math.round(basePh * m.price_km_mult);
     const city = fareAB(s, targetPh, "Місто");
     const suburb = fareAB(s, targetPh, "Глухий кут");
     const suburbAllowed = !m.city_only && m.price_km_suburb_mult != null;
+    const a = Math.round(city.a);
     return {
       ...m,
       min_price_km_city: Math.round(gCity * m.price_km_mult),
@@ -106,9 +117,11 @@ export function deriveModes(s: Settings): import("./types.ts").Mode[] {
           ? Math.round(gDead * m.price_km_suburb_mult)
           : undefined,
       target_ph: targetPh,
-      fare_a: Math.round(city.a),
+      fare_a: a,
       fare_b_city: Math.round(city.b),
       fare_b_suburb: suburbAllowed ? Math.round(suburb.b) : undefined,
+      max_km_city: econCap(a, Math.round(city.b)),
+      max_km_suburb: suburbAllowed ? econCap(a, Math.round(suburb.b)) : undefined,
     };
   });
 }
@@ -224,7 +237,11 @@ export function npkOf(rs: Row[]): number {
 export function modePass(r: Row, m: Mode): boolean {
   if (r.longHaul) return false; // дальняк (міжміський) — окрема логіка, Автопілот off
   if (r.amount < m.min_order) return false; // платформна мінімалка Uklon
-  if (m.max_km && r.distance > m.max_km) return false; // стратегічний кап обігу
+  // Кап дистанції: стратегічний (обіг у пік) + економічний (де тариф Uklon
+  // перестає покривати наш поріг). Беремо жорсткіший із наявних.
+  const zoneEcon = r.zone === "Місто" ? m.max_km_city : m.max_km_suburb;
+  const caps = [m.max_km, zoneEcon].filter((x): x is number => x != null);
+  if (caps.length && r.distance > Math.min(...caps)) return false;
   if (r.pickup_km != null && r.pickup_km > m.max_pickup_km) return false;
   const a = m.fare_a ?? 0;
   if (r.zone === "Місто") {

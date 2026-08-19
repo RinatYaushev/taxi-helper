@@ -364,9 +364,17 @@ function modeFields(m: Mode): string {
       m.city_only ? "лише місто (без сіл)" : "місто + передмістя за ₴/км",
     ),
   );
-  if (m.max_km) auto.push(row("Не брати довші", `> ${m.max_km} км`));
   if (m.tariff === "Складний" && m.min_km_in_minimum != null) {
     auto.push(row("Км у мінімалці", String(m.min_km_in_minimum)));
+  }
+  // Похідний max_km: де тариф Uklon перестає покривати наш поріг (+ стратег. кап).
+  const cityCaps = [m.max_km, m.max_km_city].filter((x): x is number => x != null);
+  const cityCap = cityCaps.length ? Math.min(...cityCaps) : null;
+  auto.push(
+    row("Не брати довші (місто)", cityCap != null ? `> ${cityCap} км` : "без межі в місті"),
+  );
+  if (m.max_km_suburb != null) {
+    auto.push(row("Тупики — не довші", `> ${m.max_km_suburb} км`));
   }
   // Група 2 — евристика ручного рішення: афінний поріг мін.суми (A + B×км),
   // виведений із ₴/год + палива + порожняку зони. В Uklon нема фільтра «₴/км».
@@ -397,6 +405,7 @@ function modeFields(m: Mode): string {
 function autopilotModes(rows: Row[], s: Settings): string {
   const base = npkOf(rows);
   const thr = s.threshold_net_per_km;
+  const uf = s.uklon_fare ?? { base: 81, per_km: 16.4 };
   const modes = deriveModes(s); // пороги ₴/км перераховані зі свіжих формул
   const always = modes.filter((m) => m.always_on);
   const switchable = modes.filter((m) => !m.always_on);
@@ -469,6 +478,9 @@ function autopilotModes(rows: Row[], s: Settings): string {
       <div class="fx-switch-title">Перемикай під попит:</div>
       <div class="grid3 fx-grid">${switchCards}</div>
       <div class="fx-note">
+        <b>📈 Тариф Uklon (з ваших даних):</b> сума ≈ ${uf.base} + ${f1(uf.per_km)}×км.
+        Звідси <b>max_km</b> — дистанція, де тариф перестає покривати наш поріг
+        (у застосунку Автопілот не вміє ₴/км, тож ріжемо по дистанції + секторах).<br>
         <b>Сектори призначення (whitelist):</b> додавай живі райони — ${liveTags}<br>
         <b>НЕ додавай</b> глухі кути (єдине, що реально збиткове): ${deadTags}<br>
         <b>🚫 Дальняк</b> (міжміський — інша економіка, Автопілот не бере автоматично): ${haulTags}
@@ -864,7 +876,9 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
         zone=tr.dataset.zone, pickup=tr.dataset.pickup;
     if(tr.dataset.longhaul==="1")return false;
     if(amount<m.min_order)return false;
-    if(m.max_km&&dist>m.max_km)return false;
+    var zoneEcon=(zone==="Місто"?m.max_km_city:m.max_km_suburb);
+    var caps=[]; if(m.max_km!=null)caps.push(m.max_km); if(zoneEcon!=null)caps.push(zoneEcon);
+    if(caps.length&&dist>Math.min.apply(null,caps))return false;
     if(pickup!=null&&pickup!==""&&(+pickup)>m.max_pickup_km)return false;
     var a=(m.fare_a!=null?m.fare_a:0);
     if(zone==="Місто")return amount>=a+(m.fare_b_city!=null?m.fare_b_city:Infinity)*dist;
