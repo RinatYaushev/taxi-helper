@@ -632,7 +632,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .addr{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151}
 .table-wrap{overflow:auto;max-height:640px;margin:0 -20px -18px;border-top:1px solid var(--line)}
 .table-wrap table{min-width:900px}
-.table-wrap thead th{position:sticky;top:0;background:#f9fafb;z-index:1}
+.table-wrap thead th{position:sticky;top:0;background:#f9fafb;z-index:5}
 #trips tbody tr:hover{background:#f8fafc}
 .mini td,.mini th{padding:6px 8px}
 .mini th{cursor:default}
@@ -645,7 +645,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .tag-live{background:#e0f2fe;color:#0369a1}
 .tag-city{background:#f3f4f6;color:#4b5563}
 .tag-haul{background:#ede9fe;color:#6d28d9}
-.npk{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.npk{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px;isolation:isolate}
 .npk-bar{position:absolute;left:0;top:50%;transform:translateY(-50%);height:16px;background:#dbeafe;border-radius:4px;z-index:0}
 .npk span{position:relative;z-index:1}
 .v-ok{color:var(--good)} .v-mid{color:var(--warn)} .v-low{color:var(--bad)}
