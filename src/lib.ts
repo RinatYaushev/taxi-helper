@@ -429,10 +429,22 @@ export function refillBreakeven(
  *
  * Ідея: приймати варто рівно ті замовлення, де **надлишок** над резервною ставкою
  * додатний: `surplus = чистий − T×цикл/60`, де `T = target_net_per_hour` — ставка,
- * яку ти отримав би замість цього замовлення. Ідеальний поріг — гіпербола
- * (короткі вимагають вищої ₴/км), а важіль Uklon плаский, тож наближаємо її
- * **сходинкою з 3 прямокутників** і жадібно беремо трійку, що захоплює
- * максимум наявного надлишку.
+ * яку ти отримав би замість цього замовлення.
+ *
+ * ⚠️ Чому не просто «жадібно взяти трійку з максимальним надлишком»: об'єднання
+ * за **АБО** бере **мінімум** порогів, тож кожен доданий фільтр може лише
+ * послабити відбір. За однакової ціни фільтр із більшим «км у мінімалці» —
+ * строга **підмножина** першого й не додає нічого. Стара версія саме так і
+ * вироджувалась: три слоти по 20 ₴/км, з яких другий додавав 1 замовлення,
+ * третій — 2, а ставка не мінялась узагалі.
+ *
+ * Тому слоти будуємо **драбиною за радіусом подачі** — це єдиний вимір, який
+ * робить їх невкладеними:
+ *   • щабель 1 — ціновий оптимум (максимум захопленого надлишку) з тим радіусом,
+ *     який він заробляє: дешеве беремо лише впритул;
+ *   • щаблі 2–3 — найдешевший поріг, що заробляє радіус на `STEP` км ширший.
+ * Тоді кожен наступний слот **строгіший за ціною, але слабший за подачею**, і
+ * ловить те, що попередній відкидає через далекого клієнта.
  *
  * Передмістя дозволяємо лише за «безпечною» ціною `B + A/k` (тоді слот ніколи
  * не пустить тупик нижче цілі) — саме тупики єдині системно збиткові.
@@ -454,55 +466,56 @@ export function deriveSlots(rows: Row[], s: Settings): import("./types.ts").Slot
       }
     }
   }
-  const asSlot = (c: Cand): import("./types.ts").Slot => ({
+  const asSlot = (c: Cand, pickup: number): import("./types.ts").Slot => ({
     id: "x", name: "", icon: "", role: "",
     price_km: c.price_km,
     price_km_suburb: c.price_km_suburb,
     km_in_min: c.km_in_min,
     min_order: c.min_order,
-    max_pickup_km: 3,
+    max_pickup_km: pickup,
     city_only: c.price_km_suburb == null,
   });
-  const masks = cands.map((c) => { const sl = asSlot(c); return rows.map((r) => slotPass(r, sl)); });
 
-  const chosen: Cand[] = [];
-  let cur = rows.map(() => false);
-  for (let step = 0; step < 3; step++) {
-    let best = -Infinity, bestI = -1;
+  // Оцінюємо кандидатів ЗА ЦІНОЮ (подача тут не при чому — вона стане окремим
+  // виміром драбини нижче; крім того, `pickup_km` поки порожній і не бектеститься).
+  const masks = cands.map((c) => { const sl = asSlot(c, 99); return rows.map((r) => slotPassPrice(r, sl)); });
+  const score = (mask: boolean[]): number =>
+    rows.reduce((a, r, j) => a + (mask[j] ? surplus(r) : 0), 0);
+  const scores = masks.map(score);
+  const radii = cands.map((c) => earnedPickupKm(rows, asSlot(c, 99), s));
+
+  const chosen: Array<{ c: Cand; pickup: number }> = [];
+  // Щабель 1 — ціновий оптимум: максимум захопленого надлишку.
+  let bestI = 0;
+  for (let i = 1; i < cands.length; i++) if (scores[i] > scores[bestI]) bestI = i;
+  chosen.push({ c: cands[bestI], pickup: radii[bestI] });
+
+  // Щаблі 2–3 — найширше покриття серед тих, хто заробив помітно більший радіус.
+  const STEP = 0.5;
+  while (chosen.length < 3) {
+    const need = chosen[chosen.length - 1].pickup + STEP;
+    let bi = -1;
     for (let i = 0; i < cands.length; i++) {
-      let sc = 0;
-      for (let j = 0; j < rows.length; j++) if (cur[j] || masks[i][j]) sc += surplus(rows[j]);
-      if (sc > best) { best = sc; bestI = i; }
+      if (radii[i] < need) continue;
+      if (bi < 0 || scores[i] > scores[bi]) bi = i;
     }
-    if (bestI < 0) break;
-    chosen.push(cands[bestI]);
-    cur = cur.map((v, j) => v || masks[bestI][j]);
+    if (bi < 0) break; // ширший радіус ніхто не заробляє — чесніше віддати слот
+    chosen.push({ c: cands[bi], pickup: radii[bi] });
   }
 
-  // Ролі за «км у мінімалці»: менший — короткі/вершки, більший — довгі/преміум.
-  chosen.sort((a, b) => a.km_in_min - b.km_in_min);
+  // Ролі — за радіусом подачі: від «тільки впритул» до «можна й поїхати».
   const meta = [
-    { id: "cream", name: "Вершки", icon: "🟢", role: "Короткі поруч: найвища ₴/км, мала подача — найкращий сегмент." },
-    { id: "work", name: "Робочий", icon: "🔵", role: "Основний потік міста. Тримає тебе зайнятим весь час." },
-    { id: "premium", name: "Преміум / довгі", icon: "🟣", role: "Довгі й передмістя — лише за високу суму (спрацьовує рідко)." },
+    { id: "close", name: "Впритул", icon: "🟢", role: "Основний потік. Дешевше — але тільки коли клієнт поруч." },
+    { id: "mid", name: "Середня подача", icon: "🔵", role: "Платять краще, тож не шкода проїхати трохи далі по клієнта." },
+    { id: "far", name: "Далека подача", icon: "🟣", role: "Дорогі замовлення — виправдовують найдовший підліт." },
   ];
-  return chosen.map((c, i) => {
-    const sl: import("./types.ts").Slot = {
-      id: meta[i]?.id ?? `slot${i}`,
-      name: meta[i]?.name ?? `Слот ${i + 1}`,
-      icon: meta[i]?.icon ?? "⚪",
-      role: meta[i]?.role ?? "",
-      price_km: c.price_km,
-      price_km_suburb: c.price_km_suburb,
-      km_in_min: c.km_in_min,
-      min_order: c.min_order,
-      max_pickup_km: 3, // тимчасово; нижче заміниться на зароблений
-      city_only: c.price_km_suburb == null,
-    };
-    // Радіус виводимо з цінового порогу слота, а не задаємо константою:
-    // дешевий слот не має права на далеку подачу.
-    return { ...sl, max_pickup_km: earnedPickupKm(rows, sl, s) };
-  });
+  return chosen.map((x, i) => ({
+    ...asSlot(x.c, x.pickup),
+    id: meta[i]?.id ?? `slot${i}`,
+    name: meta[i]?.name ?? `Слот ${i + 1}`,
+    icon: meta[i]?.icon ?? "⚪",
+    role: meta[i]?.role ?? "",
+  }));
 }
 
 // ── Знімок стану для дифу між запусками ──────────────────────────────
