@@ -444,6 +444,82 @@ function slotFields(sl: Slot): string {
   </table>`;
 }
 
+/**
+ * Чому в слотах поле «Куди → Сектори» лишається порожнім.
+ *
+ * Сектори — грубий бінарний важіль: район або весь дозволений, або весь
+ * заборонений. Ціна ₴/км для передмістя — той самий відсів, але з відтінками:
+ * тупик проходить лише тоді, коли сума покриває порожняк назад. Блок рахує на
+ * фактичних даних, наскільки добре ціна класифікує тупики, — щоб рішення
+ * «не обмежувати сектори» було перевіреним, а не сподіванням.
+ */
+function sectorsNote(rows: Row[], s: Settings, slots: Slot[]): string {
+  const T = s.target_net_per_hour ?? 200;
+  const phOf = (r: Row): number => r.net / (r.timeMin / 60);
+  const phAvg = (rs: Row[]): number => {
+    const m = rs.reduce((a, r) => a + r.timeMin, 0);
+    return m ? Math.round(rs.reduce((a, r) => a + r.net, 0) / (m / 60)) : 0;
+  };
+  const passes = (r: Row): boolean => slots.some((sl) => slotPass(r, sl));
+
+  const deads = rows.filter((r) => r.zone === "Глухий кут" && !r.longHaul);
+  const dPass = deads.filter(passes);
+  const dCut = deads.filter((r) => !passes(r));
+  // Якість класифікації: скільки прибуткових тупиків спіймано і скільки збиткових пропущено.
+  const goodDead = deads.filter((r) => phOf(r) >= T);
+  const caught = goodDead.filter(passes).length;
+  const badPassed = dPass.filter((r) => phOf(r) < T).length;
+
+  const haul = rows.filter((r) => r.longHaul);
+  const haulPass = haul.filter(passes).length;
+
+  const subPrices = slots
+    .map((sl) => (sl.price_km_suburb != null ? `${sl.price_km_suburb}` : "off"))
+    .join(" / ");
+  const cityPrices = slots.map((sl) => `${sl.price_km}`).join(" / ");
+
+  const clean = badPassed === 0 && caught === goodDead.length;
+  return `
+    <div class="fx-note fx-note-sectors">
+      <div class="fx-note-t">Чому «Куди → Сектори» лишається порожнім</div>
+      <p>Заборона районів — важіль <b>бінарний</b>: вимикає село цілком, разом із
+        рідкісними дорогими замовленнями туди. <b>Мін. ціна ₴/км · передмістя</b>
+        робить той самий відсів точніше: тупик проходить лише за суму, що покриває
+        порожняк назад. Тому в слотах стоїть <b>${esc(subPrices)} ₴/км для передмістя</b>
+        проти <b>${esc(cityPrices)}</b> у місті — це і є «фільтр по секторах», лише
+        виражений ціною.</p>
+      <div class="fx-note-grid">
+        <div><span>Тупиків у базі</span><b>${deads.length}</b>
+          <i>проходить ${dPass.length}, відсічено ${dCut.length}</i></div>
+        <div><span>Прибуткові тупики (≥ ${T} ₴/год)</span>
+          <b class="${caught === goodDead.length ? "v-ok" : "v-mid"}">${caught} з ${goodDead.length}</b>
+          <i>спіймано ціною, без whitelist</i></div>
+        <div><span>Збиткових просочилось</span>
+          <b class="${badPassed ? "v-low" : "v-ok"}">${badPassed}</b>
+          <i>відсічені тупики: ${phAvg(dCut)} ₴/год</i></div>
+        <div><span>Дальняк</span>
+          <b class="${haulPass ? "v-low" : "v-ok"}">${haulPass} з ${haul.length}</b>
+          <i>не проходить і за ціною</i></div>
+      </div>
+      <p class="fx-note-sub">${
+    clean
+      ? `На наявних даних ціна класифікує тупики <b>без помилок</b>: усі
+         ${goodDead.length} прибуткових пройшли, жоден збитковий — ні. Пройдені
+         тупики дають <b>${phAvg(dPass)} ₴/год</b> проти <b>${phAvg(dCut)}</b> у відсічених.`
+      : `Ціна класифікує тупики <b>не ідеально</b>: пройшло ${badPassed} збиткових.
+         Якщо так буде й далі — варто прибрати найгірші райони через сектори
+         або підняти ₴/км для передмістя.`
+  }
+        <b>Дальняк</b> Автопілот і так не бере автоматично (окремий тип замовлення),
+        а за ціною міжміські в базі не проходять — подвійного запобіжника не треба.</p>
+      <p class="fx-note-sub"><b>Коли сектори все ж знадобляться:</b> якщо почнуть
+        пролазити збиткові тупики (дивись число вище після кожного оновлення даних)
+        або якщо конкретний напрямок поганий не через гроші, а через дорогу —
+        розбита ґрунтівка, шлагбаум, звідти ніколи немає зворотного замовлення.
+        Ціна такого не бачить, а ти бачиш.</p>
+    </div>`;
+}
+
 /** Панель «3 постійні слоти» — практична інструкція, що вписати в Автопілот. */
 function slotsPanel(rows: Row[], s: Settings): string {
   const slots = deriveSlots(rows, s);
@@ -555,6 +631,7 @@ function slotsPanel(rows: Row[], s: Settings): string {
         </div>
       </div>
       <div class="grid3 fx-grid">${cards}</div>
+      ${sectorsNote(rows, s, slots)}
 
       <div class="fx-switch-title">Як читати трійку і який сетап обрати</div>
       <div class="fx-note fx-note-top">
@@ -657,8 +734,14 @@ function filtersCommon(rows: Row[], s: Settings): string {
     </div>
 
     <div class="fx-note fx-note-top">
-      <b>Сектори призначення (whitelist):</b> додавай живі райони — ${liveTags}<br>
-      <b>НЕ додавай</b> глухі кути (єдине, що системно збиткове): ${deadTags}<br>
+      <b>Сектори — запасний важіль, а не основний.</b> Обидва підходи ріжуть
+      невигідне <b>ціною</b> (₴/км окремо для міста й передмістя), тому поля
+      «Куди → Сектори» лишаються порожніми: заборона району вимикає його цілком,
+      разом із рідкісними дорогими замовленнями туди. Списки нижче — це
+      <b>класифікатор зон для звіту</b> (як рахувати порожняк і час), а не те, що
+      обов'язково вписувати у фільтр.<br>
+      <b>🏙 Живі райони</b> (звідси є зворотний потік): ${liveTags}<br>
+      <b>🚧 Глухі кути</b> (порожняк назад — вимагають вищої ₴/км, її ставлять слоти): ${deadTags}<br>
       <b>🚫 Дальняк</b> (міжміський — інша економіка, Автопілот не бере автоматично): ${haulTags}
     </div>`;
 }
@@ -1015,6 +1098,18 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
   border-radius:8px;padding:7px 9px;margin-bottom:6px;line-height:1.5}
 .fx-rule-note{font-size:12px;color:var(--muted);line-height:1.5}
 .fx-rule-note b{color:var(--ink)}
+/* Блок «чому не обмежуємо сектори» */
+.fx-note-sectors{margin:14px 0 0}
+.fx-note-sectors p{margin:0 0 8px}
+.fx-note-t{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--accent);margin-bottom:6px}
+.fx-note-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:10px 0}
+.fx-note-grid>div{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.fx-note-grid span{display:block;font-size:11px;color:var(--muted);line-height:1.35}
+.fx-note-grid b{display:block;font-size:17px;margin:2px 0 1px}
+.fx-note-grid i{font-style:normal;font-size:11px;color:var(--muted)}
+.fx-note-sub{font-size:12px;color:var(--muted);line-height:1.55}
+.fx-note-sub b{color:var(--ink)}
 /* Вкладки підходів */
 .fx-tabs{display:flex;gap:8px;margin:18px 0 0;border-bottom:2px solid var(--line);padding-bottom:0}
 .fx-tab{display:flex;align-items:center;gap:9px;background:transparent;border:1px solid transparent;
@@ -1105,6 +1200,7 @@ tr.mode-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
 footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
 @media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}
   .fx-rules{grid-template-columns:1fr}
+  .fx-note-grid{grid-template-columns:repeat(2,1fr)}
   .fx-tabs{flex-direction:column;gap:6px;border-bottom:none}
   .fx-tab{top:0;border-radius:10px;border:1px solid var(--line);background:#fff}
   .fx-tab.active{border-bottom:1px solid var(--accent);border-color:var(--accent)}}
