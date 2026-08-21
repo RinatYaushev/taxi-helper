@@ -76,21 +76,43 @@ function isAddr(s: string): boolean {
   return false;
 }
 
+/** Нормалізує адресу: прибирає зайві пробіли, кому в кінці й **лагодить дужки**.
+ *  OCR регулярно губить одну з дужок, і тоді адреса виглядає як
+ *  «Вулиця, 1)» або «Київська (Вінниця), 16 (Літинська», що ламає і читабельність,
+ *  і `inArea` (яка дивиться саме на текст у дужках). */
+function cleanAddr(t: string): string {
+  let s = t.trim().replace(/\s+/g, " ");
+  const count = (ch: string): number => (s.match(ch === "(" ? /\(/g : /\)/g) || []).length;
+  // Зайва закриваюча в кінці — просто відрізаємо (початок фрази загубив OCR).
+  while (count(")") > count("(") && /\)\s*$/.test(s)) s = s.replace(/\)\s*$/, "").trim();
+  // Якщо закриваючих усе ще більше — прибираємо провідну, вона без пари.
+  while (count(")") > count("(")) s = s.replace(/\)/, "").trim();
+  // Бракує закриваючої — дописуємо, щоб локалітет у дужках лишився читаним.
+  while (count("(") > count(")")) s += ")";
+  return s.replace(/[,\s]+$/, "");
+}
+
+/** Скільки OCR-рядків максимум може займати одна адреса.
+ *  Без цієї межі незакрита дужка зліплювала В УСІ наступні рядки — так
+ *  народжувались поїздки з `from === to` (перевір панель «Якість даних»). */
+const MAX_MERGE = 2;
+
 /** Зливає перенесені адресні рядки (незбалансовані дужки / хвіст-кома / "(" на початку). */
 function joinAddrs(arr: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < arr.length; i++) {
     let cur = arr[i].trim();
-    while (i + 1 < arr.length) {
+    let merged = 0;
+    while (i + 1 < arr.length && merged < MAX_MERGE) {
       const next = arr[i + 1].trim();
       const opens = (cur.match(/\(/g) || []).length;
       const closes = (cur.match(/\)/g) || []).length;
-      if (opens > closes || /,\s*$/.test(cur) || /^\(/.test(next)) { cur += " " + next; i++; }
+      if (opens > closes || /,\s*$/.test(cur) || /^\(/.test(next)) { cur += " " + next; i++; merged++; }
       else break;
     }
-    out.push(cur);
+    out.push(cleanAddr(cur));
   }
-  return out;
+  return out.filter(Boolean);
 }
 
 interface Block { file: string; lines: string[] }
@@ -172,11 +194,15 @@ function parseBlock(b: Block, dead: string[]): Parsed {
   const addrLines: string[] = [];
   for (let i = 0; i < limit; i++) if (isAddr(L[i])) addrLines.push(L[i]);
   const joined = joinAddrs(addrLines);
+  // Екран замовлення завжди показує ДВІ адреси. Якщо ми витягли лише одну —
+  // це збій розпізнавання, а не поїздка «сама в себе». Раніше тут стояло
+  // `to = joined[0]`, і такі блоки мовчки писались у data.json з from === to,
+  // а `zone` виводилась із випадкової адреси. Тепер блок іде в «проблемні».
   const from = joined[0] ?? "";
-  const to = joined.length > 1 ? joined[joined.length - 1] : (joined[0] ?? "");
+  const to = joined.length > 1 ? joined[joined.length - 1] : "";
   const zone: Zone = inArea(to, dead) ? "Глухий кут" : "Місто";
 
-  const ok = !!datetime && amount != null && distance != null && !!to;
+  const ok = !!datetime && amount != null && distance != null && !!to && from !== to;
   const trip: Trip = {
     datetime: datetime ?? "",
     // Тип оплати з розбивки лише коли вона достовірно пояснює всю суму (payViaBreakdown).
@@ -218,7 +244,15 @@ console.log(`  суму підтверджено розбивкою оплати
 console.log(`Уже в data.json: ${okRows.length - fresh.length} | нових до додавання: ${toAdd.length}`);
 const deadN = toAdd.filter((t) => t.zone === "Глухий кут").length;
 console.log(`  з них глухих кутів: ${deadN}, місто: ${toAdd.length - deadN}`);
-for (const p of bad) console.log(`  ⚠️ ${p.file}: dt=${p.trip.datetime || "?"} amt=${p.trip.amount || "?"} dist=${p.trip.distance || "?"}`);
+for (const p of bad) {
+  const why = !p.trip.datetime ? "немає дати"
+    : !p.trip.amount ? "немає суми"
+    : !p.trip.distance ? "немає дистанції"
+    : !p.trip.to ? "розпізнано лише ОДНУ адресу"
+    : p.trip.from === p.trip.to ? "from === to (злиплі адреси)"
+    : "?";
+  console.log(`  ⚠️ ${p.file}: ${why} — dt=${p.trip.datetime || "?"} amt=${p.trip.amount || "?"} dist=${p.trip.distance || "?"}`);
+}
 
 if (write && toAdd.length) {
   data.trips.push(...toAdd);

@@ -82,7 +82,18 @@ netPerKm   = net / distance
 timeMin    = cycle_model.base_min + per_km_min * distance      ← ВИМІРЯНА
 netPerHour = net / (timeMin/60)
 ```
-Рекомендація: `netPerKm ≥ threshold_net_per_km` → **бери**; `≥ marginal_net_per_km` → **думай**; інакше **пропускай**.
+**Єдина шкала рішень — `netPerHour`** (`lib.ts::compute`):
+`netPerHour ≥ target_net_per_hour` → **бери**; `≥ marginalTargetPh` → **думай**;
+інакше **пропускай**. `marginalTargetPh = target × (marginal_net_per_km /
+threshold_net_per_km)` — зберігає стару ширину смуги «думай» (10/14 → 171 ₴/год),
+але міряє її часом.
+
+> ⚠️ Раніше `rec`/`rating`/`badPct` рахувались за **₴/км**, а слоти й режими — за
+> **₴/год**. На 164 поїздках це давало **25 розбіжностей**: 4 «бери» нижче цілі
+> і 21 «не бери» вище неї (переважно довгі — ₴/км їх карала, ₴/год ні). Тепер
+> обидві частини звіту дають однакову відповідь. `threshold_net_per_km` лишився
+> **тільки** як основа «золотого правила» (`minGrossPerKm`), а не як критерій рішення.
+
 
 ### Модель часу — виміряна, не припущена
 `cycle_model` калібрується (`npm run calibrate`) регресією **інтервалу між стартами

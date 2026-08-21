@@ -63,6 +63,19 @@ export function baseTargetPh(s: Settings): number {
 }
 
 /**
+ * Нижня межа «сірої зони» в ₴/год — під нею замовлення однозначно «пропускай».
+ *
+ * Виводиться з тієї самої пропорції, що колись була в ₴/км
+ * (`marginal_net_per_km / threshold_net_per_km`, зараз 10/14), тож ширина смуги
+ * «думай» лишається такою, як була, але міряється **єдиною** шкалою — часом.
+ * Так у звіті більше немає двох систем рішень, які суперечили одна одній.
+ */
+export function marginalTargetPh(s: Settings): number {
+  const ratio = s.threshold_net_per_km > 0 ? s.marginal_net_per_km / s.threshold_net_per_km : 0.7;
+  return baseTargetPh(s) * ratio;
+}
+
+/**
  * Афінний поріг мінімальної суми: `A + B×км` (для заданого цільового ₴/год і зони).
  * Виводиться з ВИМІРЯНОЇ моделі циклу + палива + комісії:
  *   A = targetPh × base_min/60 / (1−c)                        — фікс «за клопіт»
@@ -198,13 +211,17 @@ export function compute(t: Trip, s: Settings): Computed {
   // репозиціонування, яке в місті майже завжди перекривається наступним замовленням).
   const timeMin = cycleMinutes(dist, t.zone, s);
   const netPerHour = timeMin > 0 ? net / (timeMin / 60) : 0;
-  const rating: "OK" | "погана" =
-    netPerKm >= s.threshold_net_per_km ? "OK" : "погана";
-  const marginal = s.marginal_net_per_km ?? 10;
+  // Рішення міряємо ЄДИНОЮ шкалою — чистими за годину. Час, а не кілометри,
+  // це той ресурс, якого в тебе обмежена кількість; за ₴/год побудовані й
+  // слоти, і режими. Раніше `rec` рахувався за ₴/км і суперечив панелі
+  // фільтрів на 25 зі 164 поїздок (довгі виглядали гіршими, ніж є).
+  const targetPh = baseTargetPh(s);
+  const marginalPh = marginalTargetPh(s);
+  const rating: "OK" | "погана" = netPerHour >= targetPh ? "OK" : "погана";
   const rec =
-    netPerKm >= s.threshold_net_per_km
+    netPerHour >= targetPh
       ? "бери"
-      : netPerKm >= marginal
+      : netPerHour >= marginalPh
         ? "думай"
         : "пропускай";
   // Дальняк визначаємо за призначенням (to); список — settings.long_haul_areas.
@@ -223,16 +240,18 @@ export interface GroupStat {
   km: number;
   net: number;
   netPerKm: number;
+  /** Частка замовлень, що НЕ дотягують до цілі ₴/год (rec !== "бери"). */
   badPct: number;
 }
 
-/** Зведена статистика для групи поїздок */
-export function groupStats(rows: Row[], threshold: number): GroupStat {
+/** Зведена статистика для групи поїздок.
+ *  «Погані» рахуються за `rec`, тобто за єдиною шкалою ₴/год. */
+export function groupStats(rows: Row[]): GroupStat {
   const n = rows.length;
   const amount = rows.reduce((a, r) => a + r.amount, 0);
   const km = rows.reduce((a, r) => a + r.distance, 0);
   const net = rows.reduce((a, r) => a + r.net, 0);
-  const bad = rows.filter((r) => r.netPerKm < threshold).length;
+  const bad = rows.filter((r) => r.rec !== "бери").length;
   return {
     n,
     amount,
@@ -282,8 +301,9 @@ export interface ModeStat {
   missedGood: number;
 }
 
-/** Бектест одного режиму на історії поїздок. */
-export function modeStats(rows: Row[], m: Mode, thr: number): ModeStat {
+/** Бектест одного режиму на історії поїздок.
+ *  `below`/`missedGood` — за єдиною шкалою ₴/год (через `rec`). */
+export function modeStats(rows: Row[], m: Mode): ModeStat {
   const pass = rows.filter((r) => modePass(r, m));
   const cut = rows.filter((r) => !modePass(r, m));
   return {
@@ -291,8 +311,8 @@ export function modeStats(rows: Row[], m: Mode, thr: number): ModeStat {
     cut: cut.length,
     npkPass: round(npkOf(pass)),
     npkCut: round(npkOf(cut)),
-    below: pass.filter((r) => r.netPerKm < thr).length,
-    missedGood: cut.filter((r) => r.netPerKm >= thr).length,
+    below: pass.filter((r) => r.rec !== "бери").length,
+    missedGood: cut.filter((r) => r.rec === "бери").length,
   };
 }
 
@@ -575,7 +595,7 @@ export function buildSnapshot(data: Data): Snapshot {
       thr,
     },
     modes: modes.map((m) => {
-      const st = modeStats(rows, m, thr);
+      const st = modeStats(rows, m);
       return {
         id: m.id,
         name: m.name,

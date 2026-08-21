@@ -14,6 +14,8 @@ import {
   groupStats,
   npkOf,
   inArea,
+  baseTargetPh,
+  marginalTargetPh,
   modeStats,
   buildSnapshot,
   loadSnapshot,
@@ -106,7 +108,7 @@ function insightsBox(rows: Row[], s: Settings): string {
   const cash = rows.filter((r) => r.payment === "Готівка");
   const cashless = rows.filter((r) => r.payment === "Безготівка");
   const comb = rows.filter((r) => r.payment === "Комбінована");
-  const belowThr = rows.filter((r) => r.netPerKm < s.threshold_net_per_km);
+  const below = rows.filter((r) => r.rec !== "бери");
   const lostNet = rows
     .filter((r) => r.rec === "пропускай")
     .reduce((a, r) => a + r.net, 0);
@@ -152,7 +154,7 @@ function insightsBox(rows: Row[], s: Settings): string {
     );
   }
   items.push(
-    `⚠️ Нижче порогу (${s.threshold_net_per_km} грн/км): <b class="v-low">${belowThr.length}</b> з ${rows.length} (${Math.round((belowThr.length / (rows.length || 1)) * 100)}%). На «пропускай» злито <b class="v-low">${money(lostNet)} грн</b> чистого.`,
+    `⚠️ Нижче цілі ${Math.round(baseTargetPh(s))} ₴/год: <b class="v-low">${below.length}</b> з ${rows.length} (${Math.round((below.length / (rows.length || 1)) * 100)}%). На «пропускай» (менше ${Math.round(marginalTargetPh(s))} ₴/год) злито <b class="v-low">${money(lostNet)} грн</b> чистого.`,
   );
   return `
     <div class="panel">
@@ -280,16 +282,19 @@ function tripsTable(rows: Row[]): string {
     </div>`;
 }
 
-function breakdowns(rows: Row[], thr: number): string {
+function breakdowns(rows: Row[], s: Settings): string {
+  const target = baseTargetPh(s);
+  const marginal = marginalTargetPh(s);
   const hourOf = (r: Row) => Number(r.datetime.split(" ")[1].split(":")[0]);
   const section = (title: string, groups: [string, Row[]][]): string => {
     const body = groups
       .filter(([, g]) => g.length)
       .map(([name, g]) => {
-        const st = groupStats(g, thr);
+        const st = groupStats(g);
         const mins = g.reduce((a, r) => a + r.timeMin, 0);
         const nph = mins ? st.net / (mins / 60) : 0;
-        const cls = st.netPerKm >= thr ? "ok" : st.netPerKm >= thr * 0.7 ? "mid" : "low";
+        // Колір — за єдиною шкалою ₴/год відносно цілі, а не за ₴/км.
+        const cls = nph >= target ? "ok" : nph >= marginal ? "mid" : "low";
         return `<tr>
           <td>${name}</td>
           <td class="num">${st.n}</td>
@@ -453,8 +458,8 @@ function worstList(rows: Row[], s: Settings): string {
     </div>`;
 }
 
-function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
-  const st = modeStats(rows, m, thr);
+function modeBacktest(rows: Row[], m: Mode, base: number): string {
+  const st = modeStats(rows, m);
   const delta = st.npkPass - base;
   return `<div class="fx-group-title">Бектест режиму «${esc(m.name)}» на ${rows.length} поїздках</div>
   <div class="fx-bt">
@@ -468,7 +473,7 @@ function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
       <span class="fx-delta">сер. <b class="v-low">${f1(st.npkCut)}</b> ₴/км</span></div>
     <div class="fx-bt-row"><span>❗ Прибуткових відсічено (ризик простою)</span>
       <b class="${st.missedGood ? "v-low" : "v-ok"}">${st.missedGood}</b></div>
-    <div class="fx-bt-row"><span>З пройдених нижче порогу (${thr})</span>
+    <div class="fx-bt-row"><span>З пройдених нижче цілі ₴/год</span>
       <b class="${st.below ? "v-low" : "v-ok"}">${st.below}</b></div>
   </div>`;
 }
@@ -925,7 +930,7 @@ function autopilotModes(rows: Row[], s: Settings): string {
           <span class="fx-badge fx-badge-on">завжди активний</span></div>
         <div class="fx-sub">${esc(m.when)}</div>
         ${modeFields(m)}
-        ${modeBacktest(rows, m, base, thr)}
+        ${modeBacktest(rows, m, base)}
         <button class="fx-preview" data-mode="${m.id}">🔎 Показати на історії</button>
       </div>`,
     )
@@ -939,7 +944,7 @@ function autopilotModes(rows: Row[], s: Settings): string {
           <span class="fx-badge">${esc(m.tariff)}</span></div>
         <div class="fx-sub">${esc(m.when)}</div>
         ${modeFields(m)}
-        ${modeBacktest(rows, m, base, thr)}
+        ${modeBacktest(rows, m, base)}
         <button class="fx-preview" data-mode="${m.id}">🔎 Показати на історії</button>
       </div>`,
     )
@@ -1388,10 +1393,10 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
   ${dailyTrend(rows, s)}
   ${tripsTable(rows)}
-  ${breakdowns(rows, thr)}
+  ${breakdowns(rows, s)}
   ${worstList(rows, s)}
   ${dataQuality(rows, s)}
-  <footer>Дані: data.json · формули: src/lib.ts · поріг ${thr} грн/км чистими</footer>
+  <footer>Дані: data.json · формули: src/lib.ts · рішення за ₴/год: ціль ${Math.round(baseTargetPh(s))}, «думай» від ${Math.round(marginalTargetPh(s))}</footer>
 </div>
 <script>
 // Вкладки підходів до фільтрів. Вибір запамʼятовується між перегенераціями звіту.
