@@ -371,15 +371,6 @@ function modeFields(m: Mode): string {
   if (m.tariff === "Складний" && m.min_km_in_minimum != null) {
     auto.push(row("Км у мінімалці", String(m.min_km_in_minimum)));
   }
-  // Похідний max_km: де тариф Uklon перестає покривати наш поріг (+ стратег. кап).
-  const cityCaps = [m.max_km, m.max_km_city].filter((x): x is number => x != null);
-  const cityCap = cityCaps.length ? Math.min(...cityCaps) : null;
-  auto.push(
-    row("Не брати довші (місто)", cityCap != null ? `> ${cityCap} км` : "без межі в місті"),
-  );
-  if (m.max_km_suburb != null) {
-    auto.push(row("Тупики — не довші", `> ${m.max_km_suburb} км`));
-  }
   // Група 2 — евристика ручного рішення: афінний поріг мін.суми (A + B×км),
   // виведений із ₴/год + палива + порожняку зони. Uklon має фільтр «Мін. ціна
   // ₴/км», але він ПЛОСКИЙ (одне число), а потрібний поріг — гіпербола
@@ -394,6 +385,16 @@ function modeFields(m: Mode): string {
         : "❌ не брати",
     ),
   );
+  // max_km — НЕ поле форми (у фільтрі Uklon межі дистанції немає), тому він
+  // живе серед ручних правил, а не серед того, що вписується в застосунок.
+  const cityCaps = [m.max_km, m.max_km_city].filter((x): x is number => x != null);
+  const cityCap = cityCaps.length ? Math.min(...cityCaps) : null;
+  manual.push(
+    row("Не брати довші (місто)", cityCap != null ? `> ${cityCap} км` : "без межі"),
+  );
+  if (m.max_km_suburb != null) {
+    manual.push(row("Тупики — не довші", `> ${m.max_km_suburb} км`));
+  }
   const kmHint =
     `екв. ₴/км: місто ≈ ${m.min_price_km_city ?? "—"}` +
     (m.min_price_km_suburb != null ? ` · тупик ≈ ${m.min_price_km_suburb}` : "");
@@ -401,9 +402,9 @@ function modeFields(m: Mode): string {
     <div class="fx-group-title">⚙️ Вписати в Автопілот</div>
     <table class="fx-fields">${auto.join("")}</table>
     <div class="fx-manual">
-      <div class="fx-group-title">✋ Брати вручну, якщо сума ≥ (ціль ${m.target_ph} ₴/год)</div>
+      <div class="fx-group-title">✋ Вирішувати вручну — у формі таких полів немає</div>
       <table class="fx-fields fx-fields-last">${manual.join("")}</table>
-      <div class="fx-kmhint">${kmHint}</div>
+      <div class="fx-kmhint">${kmHint} · ціль ${m.target_ph} ₴/год</div>
     </div>`;
 }
 
@@ -519,28 +520,48 @@ function slotsPanel(rows: Row[], s: Settings): string {
 
   const lost = st.netCut;
   return `
-    <div class="panel fx-panel fx-hero">
-      <div class="fx-hero-head">
-        <h3>🎰 3 постійні слоти Автопілота</h3>
-        <span class="hint">⚙️ = поле у формі фільтра Uklon · усі три ввімкнені завжди</span>
+    <div class="fx-tabpane" id="pane-slots" role="tabpanel" aria-labelledby="tab-slots">
+      <div class="fx-approach">
+        <div class="fx-approach-head">
+          <span class="fx-approach-icon">🎰</span>
+          <div>
+            <div class="fx-approach-title">Налаштував один раз — і забув</div>
+            <div class="fx-approach-tag">рекомендований підхід</div>
+          </div>
+        </div>
+        <p class="fx-approach-p">
+          Три слоти вписуються у три активні фільтри Uklon і <b>лишаються ввімкненими
+          назавжди</b>. Перемикати нічого не треба, і це не компроміс, а наслідок
+          механіки: коли ти вже везеш клієнта, м'якший слот фізично не має шансу
+          спрацювати — <b>твоя зайнятість сама грає роль «режиму»</b>.
+        </p>
+        <p class="fx-approach-p">
+          Слоти не дублюють один одного, а ділять ринок за полем
+          <b>«Км у мінімалці»</b>: мале число пускає короткі поїздки, велике вимагає
+          високої суми навіть за 2 км, тобто ловить лише дорогі. За АБО вони
+          складаються у <b>сходинку</b>, що наближає справжній поріг — гіперболу,
+          де коротким потрібна вища ₴/км.
+        </p>
+        <div class="fx-howto">
+          <div class="fx-howto-title">Як користуватись</div>
+          <ol class="fx-howto-list">
+            <li>Створи в Автопілоті <b>три фільтри</b> й перепиши поля з карток
+              один-в-один — назви збігаються з формою застосунку.</li>
+            <li>Увімкни <b>всі три одночасно</b> і більше не чіпай.</li>
+            <li>Раз на кілька змін звіряй <b>«Треба заповнити»</b> нижче: якщо почав
+              помітно простоювати — знижуй <code>target_net_per_hour</code> у
+              <code>settings</code> і перегенеруй звіт.</li>
+          </ol>
+        </div>
       </div>
-      <p class="fx-intro">
-      Uklon дозволяє <b>3 активні фільтри</b>, і вони об'єднуються за <b>АБО</b> —
-      замовлення береться, якщо підходить під будь-який. Тому строгий фільтр нічого
-      не блокує, а лише <b>додає</b>: тримати всі три ввімкненими безкоштовно.
-      <b>Перемикати нічого не треба</b> — коли ти в дорозі, м'якший слот фізично не
-      має шансу спрацювати, тож зайнятість сама грає роль «режиму».
-      Поля названі точно як у застосунку — переписуй один в один.</p>
       <div class="grid3 fx-grid">${cards}</div>
 
       <div class="fx-switch-title">Як читати трійку і який сетап обрати</div>
       <div class="fx-note fx-note-top">
-        Слоти не дублюють один одного, а ділять ринок за полем <b>«Км у мінімалці»</b>:
-        <b>${esc(ladder)}</b>. Мале число пускає <b>короткі</b> поїздки, велике —
-        вимагає високої суми навіть за 2 км, тобто ловить лише <b>дорогі</b>. Разом
-        вони складаються у <b>сходинку</b>, що наближає потрібний поріг (гіперболу:
-        коротким треба вища ₴/км). Дивись у картці рядок <b>«тільки цей слот»</b> —
-        якщо там 0, слот нічого не додає і його можна віддати під власний експеримент.
+        Дивись у картці рядок <b>«тільки цей слот»</b> — це замовлення, яких не ловить
+        жоден інший слот, тобто саме те, заради чого слот існує. Якщо там <b>0</b>,
+        слот нічого не додає і його можна віддати під власний експеримент.
+        Поточна розкладка: <b>${esc(ladder)}</b>.
       </div>
       <table class="fx-fields fx-setups">
         <thead><tr>
@@ -588,10 +609,93 @@ function slotsPanel(rows: Row[], s: Settings): string {
     </div>`;
 }
 
+/** Спільна шапка над вкладками: механіка фільтра Uklon — однакова для обох підходів. */
+function filtersCommon(rows: Row[], s: Settings): string {
+  const base = npkOf(rows);
+  const uf = s.uklon_fare ?? { base: 81, per_km: 16.4 };
+  const gold = Math.round(minGrossPerKm(s));
+  const deadTags = s.dead_end_areas
+    .map((a) => `<span class="tag tag-dead">${esc(a)}</span>`)
+    .join("");
+  const liveTags = s.live_areas
+    .map((a) => `<span class="tag tag-live">${esc(a)}</span>`)
+    .join("");
+  const haulTags = (s.long_haul_areas ?? [])
+    .map((a) => `<span class="tag tag-haul">${esc(a)}</span>`)
+    .join("");
+
+  return `
+    <p class="fx-intro">Обидва підходи нижче керують <b>тим самим</b> механізмом —
+      фільтрами «Автопілота». Різниця лише в тому, <b>скільки уваги</b> вони від тебе
+      вимагають під час зміни. Спершу — правила, спільні для обох.</p>
+
+    <div class="fx-rules">
+      <div class="fx-rule">
+        <div class="fx-rule-t">Як фільтр вирішує</div>
+        <div class="fx-rule-formula">сума ≥ Мін.вартість <b>І</b><br>
+          сума ≥ ₴/км × max(дистанція, Км&nbsp;у&nbsp;мінімалці)</div>
+        <div class="fx-rule-note">Тому підняття <b>«Км у мінімалці»</b> б'є саме по
+          коротких поїздках. <b>Максимальної дистанції у фільтрі немає</b> — довгі
+          ріжуться лише непрямо, через ₴/км.</div>
+      </div>
+      <div class="fx-rule">
+        <div class="fx-rule-t">3 активні фільтри, об'єднані за АБО</div>
+        <div class="fx-rule-note">Замовлення береться, якщо підходить під
+          <b>будь-який</b> із увімкнених. Отже строгий фільтр нічого не блокує — він
+          лише <b>додає</b>, і тримати його ввімкненим <b>безкоштовно</b>.
+          Саме тому кілька фільтрів складаються у сходинку, а не конфліктують.</div>
+      </div>
+      <div class="fx-rule">
+        <div class="fx-rule-t">Звідки беруться числа</div>
+        <div class="fx-rule-note">Тариф Uklon із твоїх даних:
+          <b>${uf.base} + ${f1(uf.per_km)}×км</b>. Золоте правило —
+          <b>${gold} ₴/км</b> валом. База без фільтра —
+          <b>${f1(base)} ₴/км</b> чистими на ${rows.length} поїздках.
+          Усе перераховується з <code>settings</code>: зміниш ціну газу чи ціль —
+          оновляться пороги.</div>
+      </div>
+    </div>
+
+    <div class="fx-note fx-note-top">
+      <b>Сектори призначення (whitelist):</b> додавай живі райони — ${liveTags}<br>
+      <b>НЕ додавай</b> глухі кути (єдине, що системно збиткове): ${deadTags}<br>
+      <b>🚫 Дальняк</b> (міжміський — інша економіка, Автопілот не бере автоматично): ${haulTags}
+    </div>`;
+}
+
+/** Секція фільтрів: спільна шапка + дві вкладки з різними підходами. */
+function filtersSection(rows: Row[], s: Settings): string {
+  return `
+    <div class="panel fx-panel fx-hero">
+      <div class="fx-hero-head">
+        <h3>🎯 Фільтри Автопілота</h3>
+        <span class="hint">⚙️ = поле у формі фільтра Uklon · 🔎 = підсвітити на історії</span>
+      </div>
+      ${filtersCommon(rows, s)}
+
+      <div class="fx-tabs" role="tablist">
+        <button class="fx-tab active" id="tab-slots" role="tab"
+          aria-selected="true" aria-controls="pane-slots" data-pane="pane-slots">
+          <span class="fx-tab-i">🎰</span>
+          <span class="fx-tab-txt"><b>3 постійні слоти</b>
+            <i>увімкнув і забув · рекомендовано</i></span>
+        </button>
+        <button class="fx-tab" id="tab-modes" role="tab"
+          aria-selected="false" aria-controls="pane-modes" data-pane="pane-modes">
+          <span class="fx-tab-i">🎛️</span>
+          <span class="fx-tab-txt"><b>4 режими з перемиканням</b>
+            <i>ручне керування під попит</i></span>
+        </button>
+      </div>
+
+      ${slotsPanel(rows, s)}
+      ${autopilotModes(rows, s)}
+    </div>`;
+}
+
 function autopilotModes(rows: Row[], s: Settings): string {
   const base = npkOf(rows);
   const thr = s.threshold_net_per_km;
-  const uf = s.uklon_fare ?? { base: 81, per_km: 16.4 };
   const modes = deriveModes(s); // пороги ₴/км перераховані зі свіжих формул
   const always = modes.filter((m) => m.always_on);
   const switchable = modes.filter((m) => !m.always_on);
@@ -624,16 +728,6 @@ function autopilotModes(rows: Row[], s: Settings): string {
     )
     .join("");
 
-  const deadTags = s.dead_end_areas
-    .map((a) => `<span class="tag tag-dead">${esc(a)}</span>`)
-    .join("");
-  const liveTags = s.live_areas
-    .map((a) => `<span class="tag tag-live">${esc(a)}</span>`)
-    .join("");
-  const haulTags = (s.long_haul_areas ?? [])
-    .map((a) => `<span class="tag tag-haul">${esc(a)}</span>`)
-    .join("");
-
   const days = new Set(rows.map((r) => r.datetime.split(" ")[0])).size;
   const smallSample = rows.length < 100 || days < 4;
   const disclaimer = smallSample
@@ -645,31 +739,41 @@ function autopilotModes(rows: Row[], s: Settings): string {
   const modesJson = JSON.stringify(modes).replace(/</g, "\\u003c");
 
   return `
-    <div class="panel fx-panel fx-hero">
-      <div class="fx-hero-head">
-        <h3>🎯 Готові фільтри для Автопілота</h3>
-        <span class="hint">⚙️ = вписати в Автопілот · ✋ = евристика ручного рішення · 🔎 = підсвітити на історії</span>
+    <div class="fx-tabpane fx-hidden" id="pane-modes" role="tabpanel" aria-labelledby="tab-modes">
+      <div class="fx-approach">
+        <div class="fx-approach-head">
+          <span class="fx-approach-icon">🎛️</span>
+          <div>
+            <div class="fx-approach-title">Керуєш вручну під поточний попит</div>
+            <div class="fx-approach-tag fx-approach-tag-alt">для експериментів</div>
+          </div>
+        </div>
+        <p class="fx-approach-p">
+          Тут ідея протилежна: <b>мінімум простою</b> за рахунок твоєї уваги. Один
+          режим працює завжди, а решту ти <b>перемикаєш сам</b> — у пік жорсткіше й
+          коротше (обіг), у затишшя нижча планка й довша подача, аби не стояти.
+        </p>
+        <p class="fx-approach-p">
+          Планка задається як <b>мінімальна сума = A + B×км</b> (афінний поріг):
+          A — фікс «за клопіт», B — за кілометр. Виводиться з <b>цілі ₴/год</b>,
+          палива, комісії та порожняку зони.
+        </p>
+        <div class="fx-warn">
+          ⚠️ <b>Чому це не рекомендований підхід.</b> Частина порогів тут —
+          <b>гіпербола A + B×км</b>, а поле Uklon «Мін. ціна ₴/км» <b>плоске</b>.
+          Точно вписати такий поріг у форму неможливо, тож рядки з позначкою ✋ — це
+          евристика для <b>ручного</b> рішення, а не налаштування. Плюс перемикання
+          легко забути, і тоді жорсткий режим тихо тримається в затишшя.
+        </div>
       </div>
-      <p class="fx-intro">Ідея: <b>мінімум простою</b>. Один фільтр працює <b>завжди</b>,
-        а решту <b>перемикаєш сам</b> під попит — у пік жорсткіше й коротше (обіг),
-        у затишшя нижча планка й довша подача (аби не стояти).
-        Планка задається як <b>мінімальна сума = A + B×км</b> (афінний поріг):
-        A — фікс «за клопіт», B — за кілометр. Виводиться з <b>цілі ₴/год</b>,
-        палива, комісії та порожняку зони й <b>перераховується автоматично</b>:
-        зміниш ціну газу чи ціль ₴/год — оновляться пороги, додаси поїздки —
-        оновиться бектест. Зараз база без фільтра —
-        <b>${f1(base)}</b> ₴/км чистими на ${rows.length} поїздках.</p>
       ${disclaimer}
       <div class="fx-always-wrap">${alwaysCards}</div>
       <div class="fx-switch-title">Перемикай під попит:</div>
       <div class="grid3 fx-grid">${switchCards}</div>
       <div class="fx-note">
-        <b>📈 Тариф Uklon (з ваших даних):</b> сума ≈ ${uf.base} + ${f1(uf.per_km)}×км.
-        Звідси <b>max_km</b> — дистанція, де тариф перестає покривати наш поріг
-        (у застосунку Автопілот не вміє ₴/км, тож ріжемо по дистанції + секторах).<br>
-        <b>Сектори призначення (whitelist):</b> додавай живі райони — ${liveTags}<br>
-        <b>НЕ додавай</b> глухі кути (єдине, що реально збиткове): ${deadTags}<br>
-        <b>🚫 Дальняк</b> (міжміський — інша економіка, Автопілот не бере автоматично): ${haulTags}
+        <b>📈 max_km</b> — дистанція, де тариф Uklon перестає покривати наш поріг.
+        У формі фільтра такого поля <b>немає</b>, тож це орієнтир для ручного
+        рішення або привід звузити сектори призначення.
       </div>
       <script>window.__MODES__=${modesJson};</script>
     </div>`;
@@ -902,6 +1006,45 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-preview:hover{background:#eef4fc}
 .fx-preview.active{background:var(--accent);color:#fff}
 .fx-now{display:inline-block;font-size:10.5px;font-weight:700;background:var(--warn-bg);color:#92600a;border:1px solid #f4d58a;padding:2px 8px;border-radius:999px;margin-left:4px}
+/* Спільні правила над вкладками */
+.fx-rules{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 14px}
+.fx-rule{background:#f9fafb;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.fx-rule-t{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--accent);margin-bottom:6px}
+.fx-rule-formula{font-size:12.5px;font-weight:600;background:#fff;border:1px solid var(--line);
+  border-radius:8px;padding:7px 9px;margin-bottom:6px;line-height:1.5}
+.fx-rule-note{font-size:12px;color:var(--muted);line-height:1.5}
+.fx-rule-note b{color:var(--ink)}
+/* Вкладки підходів */
+.fx-tabs{display:flex;gap:8px;margin:18px 0 0;border-bottom:2px solid var(--line);padding-bottom:0}
+.fx-tab{display:flex;align-items:center;gap:9px;background:transparent;border:1px solid transparent;
+  border-bottom:none;border-radius:10px 10px 0 0;padding:10px 15px;cursor:pointer;
+  color:var(--muted);text-align:left;font-family:inherit;position:relative;top:2px}
+.fx-tab:hover{background:#f3f4f6;color:var(--ink)}
+.fx-tab-i{font-size:19px;line-height:1}
+.fx-tab-txt{display:flex;flex-direction:column;line-height:1.3}
+.fx-tab-txt b{font-size:14px}
+.fx-tab-txt i{font-style:normal;font-size:11.5px;opacity:.85}
+.fx-tab.active{background:#fff;border-color:var(--line);border-bottom:2px solid #fff;
+  color:var(--accent)}
+.fx-tab.active .fx-tab-txt i{color:var(--muted)}
+.fx-tabpane{padding-top:18px}
+.fx-hidden{display:none}
+/* Опис підходу всередині вкладки */
+.fx-approach{background:linear-gradient(180deg,#f8fafc,#fff);border:1px solid var(--line);
+  border-left:3px solid var(--accent);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.fx-approach-head{display:flex;align-items:center;gap:11px;margin-bottom:9px}
+.fx-approach-icon{font-size:26px;line-height:1}
+.fx-approach-title{font-size:15px;font-weight:700;color:var(--accent)}
+.fx-approach-tag{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;background:var(--good-bg);color:var(--good);padding:1px 8px;border-radius:999px;margin-top:2px}
+.fx-approach-tag-alt{background:#e5e7eb;color:#4b5563}
+.fx-approach-p{font-size:13px;margin:0 0 8px;line-height:1.55}
+.fx-howto{background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 13px;margin-top:10px}
+.fx-howto-title{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--muted);margin-bottom:5px}
+.fx-howto-list{margin:0;padding-left:19px;font-size:12.5px;line-height:1.6}
+.fx-howto-list li{margin-bottom:3px}
 tr.mode-cut{opacity:.32}
 tr.mode-pass{background:#f0fdf4}
 tr.mode-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
@@ -960,7 +1103,11 @@ tr.mode-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
   font-size:13px;cursor:pointer;color:var(--ink);white-space:nowrap}
 .dropdown-menu button:hover{background:#f3f4f6}
 footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
-@media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}}
+@media(max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}.grid2{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}
+  .fx-rules{grid-template-columns:1fr}
+  .fx-tabs{flex-direction:column;gap:6px;border-bottom:none}
+  .fx-tab{top:0;border-radius:10px;border:1px solid var(--line);background:#fff}
+  .fx-tab.active{border-bottom:1px solid var(--accent);border-color:var(--accent)}}
 @media print{
   body{background:#fff}
   .wrap{max-width:none;padding:0}
@@ -969,6 +1116,9 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   .table-wrap{max-height:none;overflow:visible;margin:0;border-top:none}
   .table-wrap table{min-width:0}
   .table-wrap thead th{position:static}
+  /* друкуємо обидві вкладки — на папері перемикача немає */
+  .fx-hidden{display:block!important}
+  .fx-tabs{display:none}
 }
 </style>
 </head>
@@ -980,8 +1130,7 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   </header>
   <div class="cards">${kpiCards(rows)}</div>
   ${goldenBanner(s)}
-  ${slotsPanel(rows, s)}
-  ${autopilotModes(rows, s)}
+  ${filtersSection(rows, s)}
   ${changesPanel(prev, cur)}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
   ${dailyTrend(rows)}
@@ -991,6 +1140,27 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   <footer>Дані: data.json · формули: src/lib.ts · поріг ${thr} грн/км чистими</footer>
 </div>
 <script>
+// Вкладки підходів до фільтрів. Вибір запамʼятовується між перегенераціями звіту.
+(function(){
+  var tabs=[].slice.call(document.querySelectorAll(".fx-tab"));
+  if(!tabs.length)return;
+  function show(pane){
+    tabs.forEach(function(t){
+      var on=t.dataset.pane===pane;
+      t.classList.toggle("active",on);
+      t.setAttribute("aria-selected",on?"true":"false");
+      var p=document.getElementById(t.dataset.pane);
+      if(p)p.classList.toggle("fx-hidden",!on);
+    });
+    try{localStorage.setItem("th-filters-tab",pane);}catch(e){}
+  }
+  tabs.forEach(function(t){
+    t.addEventListener("click",function(){show(t.dataset.pane);});
+  });
+  var saved=null;
+  try{saved=localStorage.getItem("th-filters-tab");}catch(e){}
+  if(saved&&document.getElementById(saved))show(saved);
+})();
 var curRec="all";
 function applyFilters(){
   var q=(document.getElementById("search").value||"").trim().toLowerCase();
