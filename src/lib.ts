@@ -26,13 +26,35 @@ export function emptyCoef(t: Trip, s: Settings): number {
   return emptyCoefZone(t.zone, s);
 }
 
-/** Середня швидкість для зони (місто повільніше, села швидше), fallback — загальна. */
+/** Середня швидкість для зони (місто повільніше, села швидше), fallback — загальна.
+ *  @deprecated Використовується лише як запасний варіант, якщо немає cycle_model. */
 export function avgSpeedZone(zone: Zone, s: Settings): number {
   return (
     s.time_model?.avg_speed_by_zone?.[zone] ??
     s.time_model?.avg_speed_kmh ??
     24
   );
+}
+
+/** Коефіцієнти ВИМІРЯНОЇ моделі циклу для зони: `хв = base + perKm × км`. */
+export function cycleCoefs(zone: Zone, s: Settings): { base: number; perKm: number } {
+  const cm = s.cycle_model;
+  if (cm) {
+    const z = cm.by_zone?.[zone];
+    if (z) return { base: z.base_min, perKm: z.per_km_min };
+    return { base: cm.base_min, perKm: cm.per_km_min };
+  }
+  // Запасний варіант зі старої (модельованої) схеми: накладні + рух з порожняком.
+  const speed = avgSpeedZone(zone, s);
+  const overhead = s.time_model?.order_overhead_min ?? 4;
+  return { base: overhead, perKm: ((1 + emptyCoefZone(zone, s)) / speed) * 60 };
+}
+
+/** Тривалість повного циклу замовлення (хв): від старту цього до старту наступного.
+ *  Виміряна з даних — уже включає подачу/чекання/передачу/репозиціонування. */
+export function cycleMinutes(dist: number, zone: Zone, s: Settings): number {
+  const { base, perKm } = cycleCoefs(zone, s);
+  return base + perKm * dist;
 }
 
 /** Базова планка ₴/год для афінного порогу. */
@@ -42,17 +64,18 @@ export function baseTargetPh(s: Settings): number {
 
 /**
  * Афінний поріг мінімальної суми: `A + B×км` (для заданого цільового ₴/год і зони).
- * Виводиться з моделі часу + палива + комісії (подача=0 для правила):
- *   A = targetPh × накладні/60 / (1−c)                     — фікс «за клопіт»
- *   B = (1+порожняк) × (targetPh/швидкість + паливо/км)/(1−c) — грн/км
+ * Виводиться з ВИМІРЯНОЇ моделі циклу + палива + комісії:
+ *   A = targetPh × base_min/60 / (1−c)                        — фікс «за клопіт»
+ *   B = (targetPh × per_km_min/60 + (1+порожняк)×паливо)/(1−c) — грн/км
+ * Увага: порожняк множить лише ПАЛИВО. Час уже виміряний з інтервалів між
+ * замовленнями, тож додавати до нього порожняк назад — подвійний рахунок.
  */
 export function fareAB(s: Settings, targetPh: number, zone: Zone): { a: number; b: number } {
-  const speed = avgSpeedZone(zone, s);
-  const overhead = s.time_model?.order_overhead_min ?? 4;
+  const { base, perKm } = cycleCoefs(zone, s);
   const c = s.commission_uklon_pct / 100;
-  const k = 1 + emptyCoefZone(zone, s);
-  const a = (targetPh * overhead) / 60 / (1 - c);
-  const b = (k * (targetPh / speed + fuelPerKm(s))) / (1 - c);
+  const kGas = 1 + emptyCoefZone(zone, s);
+  const a = (targetPh * base) / 60 / (1 - c);
+  const b = ((targetPh * perKm) / 60 + kGas * fuelPerKm(s)) / (1 - c);
   return { a, b };
 }
 
@@ -169,13 +192,11 @@ export function compute(t: Trip, s: Settings): Computed {
   const net = amount - commission - gas;
   const grossPerKm = dist ? amount / dist : 0;
   const netPerKm = dist ? net / dist : 0;
-  // Час: подача (якщо відома) + пробіг + порожняк назад, за зонною швидкістю,
-  // плюс фікс. накладні на замовлення (пошук/чекання/передача/оплата).
-  const speed = avgSpeedZone(t.zone, s);
-  const overhead = s.time_model?.order_overhead_min ?? 4;
-  const pickup = Number(t.pickup_km ?? 0);
-  const movingKm = pickup + dist * (1 + emptyCoef(t, s));
-  const timeMin = overhead + (movingKm / speed) * 60;
+  // Час: ВИМІРЯНИЙ цикл замовлення (старт цього → старт наступного).
+  // Уже включає подачу, чекання, передачу й репозиціонування, тож порожняк
+  // назад сюди НЕ додаємо — інакше подвійний рахунок (він і є те саме
+  // репозиціонування, яке в місті майже завжди перекривається наступним замовленням).
+  const timeMin = cycleMinutes(dist, t.zone, s);
   const netPerHour = timeMin > 0 ? net / (timeMin / 60) : 0;
   const rating: "OK" | "погана" =
     netPerKm >= s.threshold_net_per_km ? "OK" : "погана";

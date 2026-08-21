@@ -11,10 +11,24 @@
     "commission_cashless_pct": 2,
     "threshold_net_per_km": 14,
     "marginal_net_per_km": 10,
-    "target_net_per_hour": 200,
+    "target_net_per_hour": 280,
     "uklon_fare": {
-      "base": 80.06,
-      "per_km": 17.16
+      "base": 78.9,
+      "per_km": 17.3
+    },
+    "cycle_model": {
+      "base_min": 10.61,
+      "per_km_min": 1.79,
+      "by_zone": {
+        "Місто": {
+          "base_min": 10.6,
+          "per_km_min": 1.73
+        },
+        "Глухий кут": {
+          "base_min": 12.9,
+          "per_km_min": 1.82
+        }
+      }
     },
     "time_model": {
       "avg_speed_kmh": 24,

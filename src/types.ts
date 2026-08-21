@@ -67,13 +67,24 @@ export interface Settings {
     per_km: number;
   };
   /** Модель часу для метрики ₴/год. Час = order_overhead_min +
-   *  (подача + пробіг + порожняк назад)/швидкість. Крутилки, тюняться. */
+   *  (подача + пробіг + порожняк назад)/швидкість. Крутилки, тюняться.
+   *  @deprecated Замінена на cycle_model (виміряну з даних). Лишена як fallback. */
   time_model?: {
     /** Fallback-швидкість, якщо зони немає в avg_speed_by_zone. */
     avg_speed_kmh: number;
     /** Швидкість за зоною: місто повільніше (світлофори), села швидше. */
     avg_speed_by_zone?: Partial<Record<Zone, number>>;
     order_overhead_min: number;
+  };
+  /** ВИМІРЯНА модель циклу замовлення: `хв = base_min + per_km_min × км`.
+   *  Калібрується з інтервалів між стартами сусідніх замовлень (`npm run calibrate`),
+   *  тому вже враховує подачу, чекання, передачу і РЕАЛЬНЕ репозиціонування —
+   *  порожняк назад окремо додавати НЕ можна (це подвійний рахунок: наступне
+   *  замовлення зазвичай приходить туди, де ти висадив). */
+  cycle_model?: {
+    base_min: number;
+    per_km_min: number;
+    by_zone?: Partial<Record<Zone, { base_min: number; per_km_min: number }>>;
   };
   modes: Mode[];
   dead_end_areas: string[];
