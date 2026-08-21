@@ -1073,9 +1073,11 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-setups tr.setup-cur{background:#eef4fc}
 .fx-setups tr.setup-cur td{font-weight:700;color:var(--accent)}
 .fx-note-top{margin-top:0;border-top:none;padding-top:0}
-/* Між таблицею бектесту і плашкою-попередженням — 16, інакше плашка «злипається»
-   з останнім рядком і читається як його продовження. */
-.fx-warn-bottom{margin:16px 0 0;padding:14px 16px}
+/* Між таблицею бектесту і плашкою-попередженням — 18, інакше плашка «злипається»
+   з останнім рядком і читається як його продовження.
+   Подвійний клас навмисне: .fx-warn оголошено НИЖЧЕ по файлу, і за однакової
+   специфічності перекривав би margin/padding звідси. */
+.fx-warn.fx-warn-bottom{margin:18px 0 0;padding:14px 16px}
 .fx-intro-sm{font-size:12.5px;color:var(--muted);margin:6px 0 0}
 .fx-bt{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px}
 .fx-card > .fx-bt{margin-top:auto}
