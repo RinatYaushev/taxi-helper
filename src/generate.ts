@@ -338,7 +338,8 @@ function worstList(rows: Row[]): string {
 function modeBacktest(rows: Row[], m: Mode, base: number, thr: number): string {
   const st = modeStats(rows, m, thr);
   const delta = st.npkPass - base;
-  return `<div class="fx-bt">
+  return `<div class="fx-group-title">Бектест режиму «${esc(m.name)}» на ${rows.length} поїздках</div>
+  <div class="fx-bt">
     <div class="fx-bt-row"><span>Пройшло на історії</span>
       <b>${st.pass}/${rows.length}</b></div>
     <div class="fx-bt-row"><span>Чист/км після фільтра</span>
@@ -640,6 +641,7 @@ function slotsPanel(rows: Row[], s: Settings): string {
         слот нічого не додає і його можна віддати під власний експеримент.
         Поточна розкладка: <b>${esc(ladder)}</b>.
       </div>
+      <div class="fx-group-title">Бектест сетапу «3 постійні» при різних цілях — ${rows.length} поїздок</div>
       <table class="fx-fields fx-setups">
         <thead><tr>
           <th>Ціль ₴/год</th><th class="num">₴/км слотів</th><th class="num">Приймає</th>
@@ -659,7 +661,7 @@ function slotsPanel(rows: Row[], s: Settings): string {
         бери рядок нижче; <b>стоїш без замовлень</b> — піднімайся на рядок вище.</p>
 
       <div class="fx-group-title">Бектест об'єднання на ${rows.length} поїздках</div>
-      <div class="fx-bt">
+      <div class="fx-bt fx-bt-wide">
         <div class="fx-bt-row"><span>Пройшло</span>
           <b class="v-ok">${st.pass} з ${rows.length}</b>
           <span class="fx-delta">${st.phPass} ₴/год · ${st.netPass} ₴ чистими</span></div>
@@ -669,7 +671,7 @@ function slotsPanel(rows: Row[], s: Settings): string {
         <div class="fx-bt-row"><span>Якби брав усе підряд</span>
           <b>${basePh} ₴/год</b>
           <span class="fx-delta">${Math.round(allNet)} ₴ чистими</span></div>
-        <div class="fx-bt-row"><span>Тупиків пропущено</span>
+        <div class="fx-bt-row fx-bt-count"><span>Тупиків пропущено</span>
           <b class="${st.deadEnds ? "v-mid" : "v-ok"}">${st.deadEnds}</b></div>
       </div>
       <div class="fx-warn fx-warn-bottom">
@@ -1071,11 +1073,23 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-setups tr.setup-cur{background:#eef4fc}
 .fx-setups tr.setup-cur td{font-weight:700;color:var(--accent)}
 .fx-note-top{margin-top:0;border-top:none;padding-top:0}
-.fx-warn-bottom{margin:12px 0 0}
+/* Між таблицею бектесту і плашкою-попередженням — 16, інакше плашка «злипається»
+   з останнім рядком і читається як його продовження. */
+.fx-warn-bottom{margin:16px 0 0;padding:14px 16px}
 .fx-intro-sm{font-size:12.5px;color:var(--muted);margin:6px 0 0}
 .fx-bt{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px}
 .fx-card > .fx-bt{margin-top:auto}
 .fx-bt-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0}
+/* Широкий бектест (на всю ширину панелі): у картці рядок короткий, а тут він
+   розтягнутий через півекрана — тісні 3px по вертикалі виглядають придушено. */
+.fx-bt-wide{padding:6px 20px}
+.fx-bt-wide .fx-bt-row{padding:10px 2px;border-bottom:1px solid var(--line)}
+.fx-bt-wide .fx-bt-row:last-child{border-bottom:none}
+.fx-bt-wide .fx-bt-row>b{flex:0 0 auto}
+/* Фіксовані 32 від центральної колонки: на 1440 права колонка підлазила під число. */
+.fx-bt-wide .fx-delta{flex:0 0 auto;text-align:right;margin-left:32px}
+/* Лічильник тупиків — іншої природи, ніж три грошові рядки над ним. */
+.fx-bt-count{border-top:1px solid var(--line);margin-top:2px}
 .fx-bt-row span:first-child{color:var(--muted)}
 .fx-delta{color:var(--muted);font-weight:400}
 .fx-note{margin-top:14px;font-size:12.5px;color:var(--ink);border-top:1px solid var(--line);padding-top:12px}
@@ -1084,7 +1098,7 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-manual{margin-top:auto;padding-top:6px}
 .fx-kmhint{font-size:11px;color:var(--muted);margin-top:2px;text-align:right}
 .fx-fields-last{margin-bottom:12px}
-.fx-warn{background:var(--warn-bg);border:1px solid #f4d58a;border-radius:10px;padding:9px 12px;font-size:12.5px;margin:0 0 14px}
+.fx-warn{background:var(--warn-bg);border:1px solid #f4d58a;border-radius:10px;padding:9px 12px;font-size:12.5px;margin:0 0 14px;line-height:1.55}
 .fx-preview{margin-top:10px;width:100%;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:600;cursor:pointer}
 .fx-preview:hover{background:#eef4fc}
 .fx-preview.active{background:var(--accent);color:#fff}
