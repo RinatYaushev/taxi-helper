@@ -7,6 +7,10 @@ import {
   breakeven,
   minGrossPerKm,
   deriveModes,
+  deriveSlots,
+  slotsStats,
+  refillBreakeven,
+  slotPass,
   groupStats,
   npkOf,
   modeStats,
@@ -15,7 +19,7 @@ import {
   saveSnapshot,
 } from "./lib.ts";
 import type { Snapshot } from "./lib.ts";
-import type { Row, Settings, Mode, Data } from "./types.ts";
+import type { Row, Settings, Mode, Slot, Data } from "./types.ts";
 
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) =>
@@ -404,6 +408,186 @@ function modeFields(m: Mode): string {
 }
 
 // Головна секція: режими фільтрів «Автопілота» під рівень попиту.
+
+/**
+ * Картка одного слота — **дзеркало форми фільтра в застосунку Uklon**:
+ * ті самі назви полів і той самий порядок (Звідки → Куди → Тариф → Тип оплати),
+ * щоб налаштування зводилось до механічного переписування.
+ */
+function slotFields(sl: Slot): string {
+  const sec = (t: string): string =>
+    `<tr class="fx-sec"><td colspan="2">${esc(t)}</td></tr>`;
+  const row = (k: string, v: string, dim = false): string =>
+    `<tr${dim ? ' class="fx-dim"' : ""}><td>${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`;
+  const sub = sl.price_km_suburb;
+  return `<table class="fx-fields fx-fields-last">
+    ${row("Назва фільтра", sl.name)}
+    ${sec("Звідки")}
+    ${row("Відстань", `${sl.max_pickup_km} км`)}
+    ${row("Сектори", "усі (не обмежувати)")}
+    ${sec("Куди")}
+    ${row("Сектори", sl.city_only ? "усі (обмежує тумблер)" : "усі")}
+    ${row("Лише по місту", sl.city_only ? "✅ увімк." : "⬜️ вимк.")}
+    ${sec("Тариф")}
+    ${row("Тип тарифу", "Складний")}
+    ${row("Мін. вартість", `${sl.min_order} ₴`)}
+    ${row("Км у мінімалці", `${sl.km_in_min} км`)}
+    ${row("Мін. ціна ₴/км · місто", `${sl.price_km} ₴`)}
+    ${
+    sub != null
+      ? row("Мін. ціна ₴/км · передмістя", `${sub} ₴`)
+      : row("Мін. ціна ₴/км · передмістя", "— (поле неактивне)", true)
+  }
+    ${sec("Тип оплати")}
+    ${row("Способи оплати", "усі")}
+  </table>`;
+}
+
+/** Панель «3 постійні слоти» — практична інструкція, що вписати в Автопілот. */
+function slotsPanel(rows: Row[], s: Settings): string {
+  const slots = deriveSlots(rows, s);
+  const st = slotsStats(rows, slots);
+  const rb = refillBreakeven(rows, slots);
+  const allMin = rows.reduce((a, r) => a + r.timeMin, 0);
+  const allNet = rows.reduce((a, r) => a + r.net, 0);
+  const basePh = allMin ? Math.round(allNet / (allMin / 60)) : 0;
+  const T = s.target_net_per_hour ?? 200;
+
+  const cards = slots
+    .map((sl) => {
+      // Скільки б замовлення мало коштувати на типових дистанціях
+      const ex = [2, 5, 10]
+        .map((d) => `${d} км → ${Math.round(sl.price_km * Math.max(d, sl.km_in_min))} ₴`)
+        .join(" · ");
+      const own = slotsStats(rows, [sl]);
+      const mine = rows.filter((r) => slotPass(r, sl));
+      // Унікальні — ті, що не ловить жоден інший слот: саме вони виправдовують слот.
+      const others = slots.filter((o) => o.id !== sl.id);
+      const uniq = mine.filter((r) => !others.some((o) => slotPass(r, o))).length;
+      const avgKm = mine.length
+        ? mine.reduce((a, r) => a + r.distance, 0) / mine.length
+        : 0;
+      return `
+      <div class="fx-card">
+        <div class="fx-title">${sl.icon} ${esc(sl.name)}
+          <span class="fx-badge fx-badge-on">завжди увімкнено</span></div>
+        <div class="fx-sub">${esc(sl.role)}</div>
+        <div class="fx-group-title">⚙️ Поля фільтра — переписати як є</div>
+        ${slotFields(sl)}
+        <div class="fx-bt">
+          <div class="fx-bt-row"><span>Поріг суми</span><b>${esc(ex)}</b></div>
+          <div class="fx-bt-row"><span>Ловить сам по собі</span>
+            <b>${own.pass} з ${rows.length}</b></div>
+          <div class="fx-bt-row"><span>Тільки цей слот (унікальні)</span>
+            <b class="${uniq ? "v-ok" : "v-low"}">${uniq}</b></div>
+          <div class="fx-bt-row"><span>Сер. дистанція · ₴/год</span>
+            <b>${f1(avgKm)} км · ${own.phPass}</b></div>
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  // ── «Який сетап обрати»: та сама механіка при різних цілях ₴/год ──
+  const targets = Array.from(
+    new Set([T - 60, T - 30, T, T + 30].filter((x) => x >= 120)),
+  ).sort((a, b) => a - b);
+  const setupRows = targets
+    .map((t) => {
+      const sl = deriveSlots(rows, { ...s, target_net_per_hour: t });
+      const ss = slotsStats(rows, sl);
+      const share = Math.round((ss.pass / rows.length) * 100);
+      const prices = sl.map((x) => x.price_km).join(" / ");
+      const verdict = t < T
+        ? "мʼякше: менше простою, нижча ставка"
+        : t > T
+        ? "жорсткіше: висока ставка, лише за щільного попиту"
+        : "поточна ціль (settings)";
+      return `<tr class="${t === T ? "setup-cur" : ""}">
+        <td>${t} ₴/год${t === T ? " ←" : ""}</td>
+        <td class="num">${prices}</td>
+        <td class="num">${ss.pass} (${share}%)</td>
+        <td class="num">${ss.phPass}</td>
+        <td class="num">${ss.netPass}</td>
+        <td class="setup-note">${esc(verdict)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const ladder = slots
+    .map((x) => `${x.icon} ${x.name} — ${x.km_in_min} км / ${x.price_km} ₴ за км`)
+    .join(" · ");
+
+  const lost = st.netCut;
+  return `
+    <div class="panel fx-panel fx-hero">
+      <div class="fx-hero-head">
+        <h3>🎰 3 постійні слоти Автопілота</h3>
+        <span class="hint">⚙️ = поле у формі фільтра Uklon · усі три ввімкнені завжди</span>
+      </div>
+      <p class="fx-intro">
+      Uklon дозволяє <b>3 активні фільтри</b>, і вони об'єднуються за <b>АБО</b> —
+      замовлення береться, якщо підходить під будь-який. Тому строгий фільтр нічого
+      не блокує, а лише <b>додає</b>: тримати всі три ввімкненими безкоштовно.
+      <b>Перемикати нічого не треба</b> — коли ти в дорозі, м'якший слот фізично не
+      має шансу спрацювати, тож зайнятість сама грає роль «режиму».
+      Поля названі точно як у застосунку — переписуй один в один.</p>
+      <div class="grid3 fx-grid">${cards}</div>
+
+      <div class="fx-switch-title">Як читати трійку і який сетап обрати</div>
+      <div class="fx-note fx-note-top">
+        Слоти не дублюють один одного, а ділять ринок за полем <b>«Км у мінімалці»</b>:
+        <b>${esc(ladder)}</b>. Мале число пускає <b>короткі</b> поїздки, велике —
+        вимагає високої суми навіть за 2 км, тобто ловить лише <b>дорогі</b>. Разом
+        вони складаються у <b>сходинку</b>, що наближає потрібний поріг (гіперболу:
+        коротким треба вища ₴/км). Дивись у картці рядок <b>«тільки цей слот»</b> —
+        якщо там 0, слот нічого не додає і його можна віддати під власний експеримент.
+      </div>
+      <table class="fx-fields fx-setups">
+        <thead><tr>
+          <th>Ціль ₴/год</th><th class="num">₴/км слотів</th><th class="num">Приймає</th>
+          <th class="num">₴/год</th><th class="num">Чистими, ₴</th>
+          <th class="num">Треба заповнити</th><th>Що це означає</th>
+        </tr></thead>
+        <tbody>${setupRows}</tbody>
+      </table>
+      <p class="fx-intro fx-intro-sm"><b>«Треба заповнити»</b> — головна колонка.
+        Фільтр завжди міняє гроші на час: ти віддаєш відсіяні замовлення в обмін на
+        вільні години. Число показує, <b>яку частку цих годин мусиш зайняти новими
+        замовленнями, щоб просто вийти в нуль</b>. До 50% — запас великий, вище 70% —
+        ставка тримається тільки за щільного попиту, і будь-який простій з'їдає виграш.</p>
+      <p class="fx-intro fx-intro-sm">Ціль задається одним числом —
+        <code>target_net_per_hour</code> у <code>settings</code>, решта перерахується
+        сама. Правило вибору просте: <b>є черга замовлень</b> (вечір пʼятниці, дощ) —
+        бери рядок нижче; <b>стоїш без замовлень</b> — піднімайся на рядок вище.</p>
+
+      <div class="fx-group-title">Бектест об'єднання на ${rows.length} поїздках</div>
+      <div class="fx-bt">
+        <div class="fx-bt-row"><span>Пройшло</span>
+          <b class="v-ok">${st.pass} з ${rows.length}</b>
+          <span class="fx-delta">${st.phPass} ₴/год · ${st.netPass} ₴ чистими</span></div>
+        <div class="fx-bt-row"><span>Відсіяно</span>
+          <b>${st.cut}</b>
+          <span class="fx-delta">${st.phCut} ₴/год · ${lost} ₴ чистими</span></div>
+        <div class="fx-bt-row"><span>Якби брав усе підряд</span>
+          <b>${basePh} ₴/год</b>
+          <span class="fx-delta">${Math.round(allNet)} ₴ чистими</span></div>
+        <div class="fx-bt-row"><span>Тупиків пропущено</span>
+          <b class="${st.deadEnds ? "v-mid" : "v-ok"}">${st.deadEnds}</b></div>
+      </div>
+      <div class="fx-warn fx-warn-bottom">
+      ⚠️ <b>Головний компроміс.</b> Слоти підібрані під ціль <b>${T} ₴/год</b>: вони
+      піднімають ставку з ${basePh} до <b>${st.phPass} ₴/год</b>, але відсікають
+      ${st.cut} замовлень на <b>${lost} ₴</b> і звільняють <b>${f1(rb.freedH)} год</b>
+      з ${f1(allMin / 60)}. Щоб цей обмін вийшов бодай у нуль, треба заповнити
+      <b class="${rb.fill < 0.5 ? "v-ok" : rb.fill < 0.7 ? "v-mid" : "v-low"}">${Math.round(rb.fill * 100)}%</b>
+      звільненого часу новими замовленнями такої ж якості.
+      Чи так буде — <b>з наявних даних не видно</b>: ми бачимо тільки прийняті
+      замовлення, а не ті, що фільтр відхилив. Якщо почнеш помітно простоювати —
+      знижуй <code>target_net_per_hour</code>.
+      </div>
+    </div>`;
+}
+
 function autopilotModes(rows: Row[], s: Settings): string {
   const base = npkOf(rows);
   const thr = s.threshold_net_per_km;
@@ -684,8 +868,26 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-fields{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px}
 .fx-fields td{padding:6px 8px;border-bottom:1px solid var(--line)}
 .fx-fields td:first-child{color:var(--muted)}
-.fx-fields td:last-child{text-align:right;white-space:nowrap}
+.fx-fields td:last-child{text-align:right;white-space:nowrap;padding-left:14px}
+/* Підзаголовки груп полів (як розділи форми фільтра в застосунку) */
+.fx-fields tr.fx-sec td{padding:10px 8px 3px;font-size:10.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--accent);
+  background:transparent;border-bottom:1px solid var(--line)}
+.fx-fields tr.fx-dim td{color:#9ca3af}
+.fx-fields tr.fx-dim td b{font-weight:500}
+/* Порівняння сетапів під різні цілі ₴/год */
+.fx-setups{margin:8px 0 6px;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.fx-setups th{padding:7px 10px;cursor:default;background:#f9fafb}
+.fx-setups td{padding:7px 10px;white-space:nowrap}
+.fx-setups td:first-child{color:var(--ink);font-weight:600}
+.fx-setups td.setup-note{white-space:normal;color:var(--muted);font-size:12px;text-align:left}
+.fx-setups tr.setup-cur{background:#eef4fc}
+.fx-setups tr.setup-cur td{font-weight:700;color:var(--accent)}
+.fx-note-top{margin-top:0;border-top:none;padding-top:0}
+.fx-warn-bottom{margin:12px 0 0}
+.fx-intro-sm{font-size:12.5px;color:var(--muted);margin:6px 0 0}
 .fx-bt{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px}
+.fx-card > .fx-bt{margin-top:auto}
 .fx-bt-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0}
 .fx-bt-row span:first-child{color:var(--muted)}
 .fx-delta{color:var(--muted);font-weight:400}
@@ -778,6 +980,7 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   </header>
   <div class="cards">${kpiCards(rows)}</div>
   ${goldenBanner(s)}
+  ${slotsPanel(rows, s)}
   ${autopilotModes(rows, s)}
   ${changesPanel(prev, cur)}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>

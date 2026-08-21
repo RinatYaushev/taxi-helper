@@ -301,6 +301,145 @@ function round(n: number, d = 2): number {
   return Math.round(n * p) / p;
 }
 
+// ── 3 постійні слоти Автопілота ──────────────────────────────────────
+
+/**
+ * Чи пройде замовлення крізь слот — точна семантика фільтра Uklon:
+ *   `сума ≥ Мін.вартість` І `сума ≥ ₴/км × max(дистанція, Км-у-мінімалці)`.
+ * (Інференс із поведінки фільтра, не з документації.)
+ */
+export function slotPass(r: Row, s: import("./types.ts").Slot): boolean {
+  if (r.longHaul) return false; // міжміський — Автопілот off
+  if (r.zone !== "Місто") {
+    if (s.city_only || s.price_km_suburb == null) return false;
+  }
+  if (r.amount < s.min_order) return false;
+  if (r.pickup_km != null && r.pickup_km > s.max_pickup_km) return false;
+  const p = r.zone === "Місто" ? s.price_km : (s.price_km_suburb as number);
+  return r.amount >= p * Math.max(r.distance, s.km_in_min);
+}
+
+/** Бектест набору слотів (об'єднання за АБО). */
+export function slotsStats(rows: Row[], slots: import("./types.ts").Slot[]): import("./types.ts").SlotStat {
+  const acc = rows.filter((r) => slots.some((s) => slotPass(r, s)));
+  const cut = rows.filter((r) => !slots.some((s) => slotPass(r, s)));
+  const ph = (rs: Row[]): number => {
+    const mins = rs.reduce((a, r) => a + r.timeMin, 0);
+    return mins ? rs.reduce((a, r) => a + r.net, 0) / (mins / 60) : 0;
+  };
+  return {
+    pass: acc.length,
+    cut: cut.length,
+    phPass: Math.round(ph(acc)),
+    phCut: Math.round(ph(cut)),
+    netPass: Math.round(acc.reduce((a, r) => a + r.net, 0)),
+    netCut: Math.round(cut.reduce((a, r) => a + r.net, 0)),
+    deadEnds: acc.filter((r) => r.zone === "Глухий кут").length,
+  };
+}
+
+/**
+ * Беззбитковість фільтра: яку частку **звільненого часу** треба заповнити новими
+ * замовленнями, щоб фільтр вийшов хоча б у нуль по грошах.
+ *
+ * Фільтр — це завжди обмін: ти віддаєш `lostNet` гривень зараз в обмін на
+ * `freedH` вільних годин. Обмін окупається, якщо ці години принесуть не менше:
+ *   `freedH × phPass × fill ≥ lostNet`  ⇒  `fill = lostNet / (freedH × phPass)`.
+ *
+ * Це єдине чесне число для вибору `target_net_per_hour`: воно показує, наскільки
+ * щільним має бути потік замовлень, щоб ставка виправдала відсіювання. Дані про
+ * відхилені замовлення нам недоступні, тож `fill` — вимога, а не факт.
+ */
+export function refillBreakeven(
+  rows: Row[],
+  slots: import("./types.ts").Slot[],
+): { freedH: number; lostNet: number; fill: number; phPass: number } {
+  const pass = rows.filter((r) => slots.some((s) => slotPass(r, s)));
+  const cut = rows.filter((r) => !slots.some((s) => slotPass(r, s)));
+  const passH = pass.reduce((a, r) => a + r.timeMin, 0) / 60;
+  const freedH = cut.reduce((a, r) => a + r.timeMin, 0) / 60;
+  const lostNet = cut.reduce((a, r) => a + r.net, 0);
+  const phPass = passH ? pass.reduce((a, r) => a + r.net, 0) / passH : 0;
+  const potential = freedH * phPass;
+  return { freedH, lostNet, fill: potential > 0 ? lostNet / potential : 0, phPass };
+}
+
+/**
+ * Підібрати 3 постійні слоти з даних.
+ *
+ * Ідея: приймати варто рівно ті замовлення, де **надлишок** над резервною ставкою
+ * додатний: `surplus = чистий − T×цикл/60`, де `T = target_net_per_hour` — ставка,
+ * яку ти отримав би замість цього замовлення. Ідеальний поріг — гіпербола
+ * (короткі вимагають вищої ₴/км), а важіль Uklon плаский, тож наближаємо її
+ * **сходинкою з 3 прямокутників** і жадібно беремо трійку, що захоплює
+ * максимум наявного надлишку.
+ *
+ * Передмістя дозволяємо лише за «безпечною» ціною `B + A/k` (тоді слот ніколи
+ * не пустить тупик нижче цілі) — саме тупики єдині системно збиткові.
+ */
+export function deriveSlots(rows: Row[], s: Settings): import("./types.ts").Slot[] {
+  const T = baseTargetPh(s);
+  const surplus = (r: Row): number => r.net - (T * r.timeMin) / 60;
+  const dead = fareAB(s, T, "Глухий кут");
+
+  interface Cand { price_km: number; km_in_min: number; min_order: number; price_km_suburb?: number }
+  const cands: Cand[] = [];
+  for (const km_in_min of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]) {
+    // «Безпечна» ціна для передмістя за цього km_in_min
+    const subSafe = Math.ceil(dead.b + dead.a / km_in_min);
+    for (let price_km = 18; price_km <= 60; price_km++) {
+      for (const min_order of [80, 90]) {
+        cands.push({ price_km, km_in_min, min_order });
+        cands.push({ price_km, km_in_min, min_order, price_km_suburb: subSafe });
+      }
+    }
+  }
+  const asSlot = (c: Cand): import("./types.ts").Slot => ({
+    id: "x", name: "", icon: "", role: "",
+    price_km: c.price_km,
+    price_km_suburb: c.price_km_suburb,
+    km_in_min: c.km_in_min,
+    min_order: c.min_order,
+    max_pickup_km: 3,
+    city_only: c.price_km_suburb == null,
+  });
+  const masks = cands.map((c) => { const sl = asSlot(c); return rows.map((r) => slotPass(r, sl)); });
+
+  const chosen: Cand[] = [];
+  let cur = rows.map(() => false);
+  for (let step = 0; step < 3; step++) {
+    let best = -Infinity, bestI = -1;
+    for (let i = 0; i < cands.length; i++) {
+      let sc = 0;
+      for (let j = 0; j < rows.length; j++) if (cur[j] || masks[i][j]) sc += surplus(rows[j]);
+      if (sc > best) { best = sc; bestI = i; }
+    }
+    if (bestI < 0) break;
+    chosen.push(cands[bestI]);
+    cur = cur.map((v, j) => v || masks[bestI][j]);
+  }
+
+  // Ролі за «км у мінімалці»: менший — короткі/вершки, більший — довгі/преміум.
+  chosen.sort((a, b) => a.km_in_min - b.km_in_min);
+  const meta = [
+    { id: "cream", name: "Вершки", icon: "🟢", role: "Короткі поруч: найвища ₴/км, мала подача — найкращий сегмент.", pickup: 1.5 },
+    { id: "work", name: "Робочий", icon: "🔵", role: "Основний потік міста. Тримає тебе зайнятим весь час.", pickup: 3 },
+    { id: "premium", name: "Преміум / довгі", icon: "🟣", role: "Довгі й передмістя — лише за високу суму (спрацьовує рідко).", pickup: 3 },
+  ];
+  return chosen.map((c, i) => ({
+    id: meta[i]?.id ?? `slot${i}`,
+    name: meta[i]?.name ?? `Слот ${i + 1}`,
+    icon: meta[i]?.icon ?? "⚪",
+    role: meta[i]?.role ?? "",
+    price_km: c.price_km,
+    price_km_suburb: c.price_km_suburb,
+    km_in_min: c.km_in_min,
+    min_order: c.min_order,
+    max_pickup_km: meta[i]?.pickup ?? 3,
+    city_only: c.price_km_suburb == null,
+  }));
+}
+
 // ── Знімок стану для дифу між запусками ──────────────────────────────
 
 export interface ModeSnap {
@@ -385,4 +524,3 @@ export function loadSnapshot(path = ".report-state.json"): Snapshot | null {
 export function saveSnapshot(s: Snapshot, path = ".report-state.json"): void {
   writeFileSync(path, JSON.stringify(s, null, 2) + "\n", "utf8");
 }
-

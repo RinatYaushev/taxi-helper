@@ -11,7 +11,7 @@
     "commission_cashless_pct": 2,
     "threshold_net_per_km": 14,
     "marginal_net_per_km": 10,
-    "target_net_per_hour": 280,
+    "target_net_per_hour": 240,
     "uklon_fare": {
       "base": 78.9,
       "per_km": 17.3
