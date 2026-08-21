@@ -13,6 +13,7 @@ import {
   slotPass,
   groupStats,
   npkOf,
+  inArea,
   modeStats,
   buildSnapshot,
   loadSnapshot,
@@ -104,6 +105,7 @@ function insightsBox(rows: Row[], s: Settings): string {
   const dead = rows.filter((r) => r.zone === "Глухий кут");
   const cash = rows.filter((r) => r.payment === "Готівка");
   const cashless = rows.filter((r) => r.payment === "Безготівка");
+  const comb = rows.filter((r) => r.payment === "Комбінована");
   const belowThr = rows.filter((r) => r.netPerKm < s.threshold_net_per_km);
   const lostNet = rows
     .filter((r) => r.rec === "пропускай")
@@ -118,20 +120,35 @@ function insightsBox(rows: Row[], s: Settings): string {
     hb("після 21", rows.filter((r) => hourOf(r) >= 21)),
   ].filter(([, g]) => g.length);
   const bestHour = [...hourBuckets].sort((a, b) => npk(b[1]) - npk(a[1]))[0];
+  const worstHour = [...hourBuckets].sort((a, b) => npk(a[1]) - npk(b[1]))[0];
 
   const items: string[] = [];
+  const longPh = long.length
+    ? long.reduce((a, r) => a + r.net, 0) / (long.reduce((a, r) => a + r.timeMin, 0) / 60)
+    : 0;
+  const lossMaking = rows.filter((r) => r.net < 0).length;
   items.push(
-    `📏 Короткі (&lt;7 км) дають <b class="v-ok">${f1(npk(short))}</b> грн/км, а довгі (12+ км) — <b class="v-low">${f1(npk(long))}</b> грн/км. Прибуток обернено залежить від дистанції.`,
+    `📏 Короткі (&lt;7 км) дають <b class="v-ok">${f1(npk(short))}</b> грн/км, довгі (12+ км) — <b class="v-low">${f1(npk(long))}</b> грн/км.
+     Але <b>в мінус не йде ${lossMaking === 0 ? "жодна" : String(lossMaking)}</b>: 12+ км це ${money(longPh)} грн/год,
+     тобто питання не «збиткова», а «гірша за твій час».`,
   );
   items.push(
     `🏘️ Місто: <b class="v-ok">${f1(npk(city))}</b> грн/км проти глухих кутів <b class="v-low">${f1(npk(dead))}</b> грн/км (${dead.length} поїздок у тупики).`,
   );
   items.push(
-    `💳 Готівка <b>${f1(npk(cash))}</b> vs безготівка <b>${f1(npk(cashless))}</b> грн/км — тип оплати майже не вирішує.`,
+    `💳 Готівка <b>${f1(npk(cash))}</b> · безготівка <b>${f1(npk(cashless))}</b>${comb.length ? ` · комбінована <b>${f1(npk(comb))}</b>` : ""} грн/км — тип оплати майже не вирішує.`,
   );
-  if (bestHour) {
+  if (bestHour && worstHour) {
+    const gap = npk(bestHour[1]) - npk(worstHour[1]);
+    // Розкид ВСЕРЕДИНІ груп зазвичай у рази більший за розрив МІЖ ними,
+    // тож подавати «найкращу годину» як пораду — видавати шум за сигнал.
+    const spread = Math.sqrt(
+      rows.reduce((a, r) => a + (r.netPerKm - npk(rows)) ** 2, 0) / (rows.length || 1),
+    );
     items.push(
-      `⏰ Найкраща година: <b>${bestHour[0]}</b> — ${f1(npk(bestHour[1]))} грн/км.`,
+      gap >= spread / 2
+        ? `⏰ Найкраще вікно: <b>${bestHour[0]}</b> — ${f1(npk(bestHour[1]))} грн/км (n=${bestHour[1].length}).`
+        : `⏰ Година виїзду <b>майже не впливає</b>: розрив між найкращим (${bestHour[0]}, ${f1(npk(bestHour[1]))}) і найгіршим (${worstHour[0]}, ${f1(npk(worstHour[1]))}) вікном — лише ${f1(gap)} грн/км при розкиді ±${f1(spread)} всередині груп. Планувати графік за цим не варто.`,
     );
   }
   items.push(
@@ -144,7 +161,7 @@ function insightsBox(rows: Row[], s: Settings): string {
     </div>`;
 }
 
-function dailyTrend(rows: Row[]): string {
+function dailyTrend(rows: Row[], s: Settings): string {
   const byDay = new Map<string, Row[]>();
   for (const r of rows) {
     const day = r.datetime.split(" ")[0];
@@ -162,18 +179,22 @@ function dailyTrend(rows: Row[]): string {
       const km = g.reduce((a, r) => a + r.distance, 0);
       const dnpk = km ? net / km : 0;
       const h = Math.max(4, (net / maxNet) * 120);
-      const cls = dnpk >= 14 ? "ok" : dnpk >= 10 ? "mid" : "low";
+      // Пороги беремо з settings, а не хардкодимо — інакше при зміні
+      // threshold_net_per_km кольори лишаться від старого правила.
+      const cls = dnpk >= s.threshold_net_per_km ? "ok" : dnpk >= s.marginal_net_per_km ? "mid" : "low";
+      // Дні з 1–3 поїздками — шумні, позначаємо, щоб не читались як тренд.
+      const thin = g.length <= 3 ? ` <span class="bar-thin" title="мало даних">·${g.length}</span>` : "";
       return `<div class="bar-col" title="${day}: ${money(net)} грн, ${f1(dnpk)} грн/км, ${g.length} поїздок">
         <div class="bar-val">${money(net)}</div>
         <div class="bar bar-${cls}" style="height:${h}px"></div>
-        <div class="bar-lbl">${day}</div>
+        <div class="bar-lbl">${day}${thin}</div>
         <div class="bar-sub v-${cls}">${f1(dnpk)}</div>
       </div>`;
     })
     .join("");
   return `
     <div class="panel">
-      <h3>Динаміка по днях <span class="hint">(висота — чистий грн, число знизу — чист/км)</span></h3>
+      <h3>Динаміка по днях <span class="hint">(висота — чистий грн, число знизу — чист/км; ·N — день із малою вибіркою)</span></h3>
       <div class="chart">${bars}</div>
     </div>`;
 }
@@ -315,22 +336,119 @@ function breakdowns(rows: Row[], thr: number): string {
   return `<div class="grid2">${dist}${zone}</div><div class="grid2">${hour}${pay}</div>`;
 }
 
-function worstList(rows: Row[]): string {
-  const worst = [...rows].sort((a, b) => a.netPerKm - b.netPerKm).slice(0, 8);
+/**
+ * Панель «Якість даних» — самоперевірка вхідних рядків.
+ * Кожна знахідка тут тихо псує всі числа вище, тому шукаємо їх автоматично
+ * після кожного `npm run generate`, а не раз на місяць вручну.
+ */
+function dataQuality(rows: Row[], s: Settings): string {
+  const issues: Array<{ lvl: "err" | "warn" | "info"; title: string; body: string }> = [];
+
+  // 1. zone не збігається з адресою за правилом inArea(to, dead_end_areas)
+  const zoneBad = rows.filter((r) => inArea(r.to, s.dead_end_areas) !== (r.zone === "Глухий кут"));
+  if (zoneBad.length) {
+    issues.push({
+      lvl: "err",
+      title: `Зона не збігається з адресою: ${zoneBad.length}`,
+      body: zoneBad
+        .map((r) => `${esc(r.datetime)} — <code>${esc(r.zone)}</code>, але «${esc(r.to.slice(0, 46))}»`)
+        .join("<br>"),
+    });
+  }
+
+  // 2. from == to — поїздка нікуди; майже завжди збій парсера адрес
+  const sameFromTo = rows.filter((r) => r.from && r.from === r.to);
+  if (sameFromTo.length) {
+    issues.push({
+      lvl: "err",
+      title: `Точка А = точка Б: ${sameFromTo.length}`,
+      body: sameFromTo
+        .map((r) => `${esc(r.datetime)} · ${f2(r.distance)} км · ${money(r.amount)} ₴ — «${esc(r.to.slice(0, 46))}»`)
+        .join("<br>") + `<br><i>Дистанція &gt; 0 при однаковій адресі — злиплі адреси в парсері. Числа могли теж постраждати.</i>`,
+    });
+  }
+
+  // 3. Незбалансовані дужки в адресі — ознака того, що OCR/парсер обрізав рядок
+  const brokenAddr = rows.filter((r) => {
+    const c = (t: string, ch: string): number => t.split(ch).length - 1;
+    return c(r.to, "(") !== c(r.to, ")") || c(r.from, "(") !== c(r.from, ")");
+  });
+  if (brokenAddr.length) {
+    issues.push({
+      lvl: "warn",
+      title: `Поламані дужки в адресі: ${brokenAddr.length}`,
+      body: brokenAddr.map((r) => `${esc(r.datetime)} — «${esc(r.to.slice(0, 46))}»`).join("<br>"),
+    });
+  }
+
+  // 4. Подача — поле фільтра, яке без даних не бектеститься
+  const withPickup = rows.filter((r) => r.pickup_km != null).length;
+  issues.push({
+    lvl: withPickup >= 20 ? "info" : "warn",
+    title: `Подача (pickup_km): ${withPickup} з ${rows.length}`,
+    body:
+      withPickup >= 20
+        ? `Достатньо для калібрування радіуса з факту.`
+        : `Поки менше 20 замірів, радіус подачі в слотах — <b>розрахунок, а не факт</b>: ` +
+          `перевірка подачі в бектесті пропускається, а типова подача береться з порожняку (~${f1(
+            (rows.reduce((a, r) => a + r.distance, 0) / (rows.length || 1)) * (s.empty_run_by_zone?.["Місто"] ?? s.empty_run_coef),
+          )} км).`,
+  });
+
+  // 5. Дні з малою вибіркою
+  const byDay = new Map<string, number>();
+  for (const r of rows) byDay.set(r.datetime.split(" ")[0], (byDay.get(r.datetime.split(" ")[0]) ?? 0) + 1);
+  const thin = [...byDay.entries()].filter(([, n]) => n <= 3);
+  if (thin.length) {
+    issues.push({
+      lvl: "info",
+      title: `Дні з 1–3 поїздками: ${thin.length}`,
+      body: `${thin.map(([d, n]) => `${esc(d)} (${n})`).join(", ")} — стовпчики в «Динаміці по днях» там шумні.`,
+    });
+  }
+
+  const body = issues
+    .map(
+      (i) => `<div class="dq-item dq-${i.lvl}">
+        <div class="dq-title">${i.lvl === "err" ? "✖" : i.lvl === "warn" ? "▲" : "•"} ${i.title}</div>
+        <div class="dq-body">${i.body}</div>
+      </div>`,
+    )
+    .join("");
+  const errs = issues.filter((i) => i.lvl === "err").length;
+  return `
+    <div class="panel">
+      <h3>🧪 Якість даних ${errs ? `<span class="hint">— ${errs} потребує втручання</span>` : '<span class="hint">— критичних проблем немає</span>'}</h3>
+      <div class="dq-grid">${body}</div>
+    </div>`;
+}
+
+function worstList(rows: Row[], s: Settings): string {
+  const T = s.target_net_per_hour ?? 200;
+  // Сортуємо за ₴/ГОД, а не ₴/км: рішення «брати чи ні» ухвалюється за
+  // вартістю часу, і саме за нею побудовані слоти/режими. Сортування за ₴/км
+  // піднімало нагору довгі поїздки, які насправді ближчі до цілі.
+  const worst = [...rows].sort((a, b) => a.netPerHour - b.netPerHour).slice(0, 8);
   const items = worst
     .map(
       (r) => `
       <li>
-        <span class="w-npk">${f1(r.netPerKm)}</span>
+        <span class="w-npk">${Math.round(r.netPerHour)}</span>
         <span class="w-info">${esc(r.datetime)} · ${money(r.amount)} грн · ${f2(r.distance)} км
-          ${r.zone === "Глухий кут" ? '<span class="tag tag-dead">тупик</span>' : ""}</span>
+          · ${f1(r.netPerKm)} ₴/км
+          ${r.zone === "Глухий кут" ? '<span class="tag tag-dead">тупик</span>' : ""}
+          ${r.longHaul ? '<span class="tag tag-dead">дальняк</span>' : ""}</span>
         <span class="w-route">${esc(r.from)} → ${esc(r.to)}</span>
       </li>`,
     )
     .join("");
   return `
     <div class="panel">
-      <h3>🚫 Найгірші 8 (кандидати відсікати)</h3>
+      <h3>🚫 Найгірші 8 за ₴/год (кандидати відсікати)</h3>
+      <p class="fx-intro fx-intro-sm">Велике число зліва — <b>чистими за годину</b>.
+        Ціль — ${T} ₴/год. Це та сама метрика, за якою працюють слоти, тому список
+        збігається з тим, що фільтр відсіює. Жодна з них не збиткова —
+        вони просто <b>гірші за твій час</b>.</p>
       <ul class="worst">${items}</ul>
     </div>`;
 }
@@ -1111,6 +1229,15 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .fx-note{margin-top:14px;font-size:12.5px;color:var(--ink);border-top:1px solid var(--line);padding-top:12px}
 .fx-group-title{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 3px}
 .fx-group-title:first-child{margin-top:0}
+.dq-grid{display:flex;flex-direction:column;gap:10px}
+.dq-item{border-left:3px solid var(--line);padding:8px 12px;border-radius:0 6px 6px 0;background:rgba(255,255,255,.02)}
+.dq-err{border-left-color:#e5484d;background:rgba(229,72,77,.07)}
+.dq-warn{border-left-color:#f5a524;background:rgba(245,165,36,.06)}
+.dq-info{border-left-color:#3b82f6;background:rgba(59,130,246,.05)}
+.dq-title{font-weight:700;font-size:12.5px;margin-bottom:3px}
+.dq-body{font-size:12px;color:var(--muted);line-height:1.6}
+.dq-body code{font-size:11px}
+.bar-thin{color:var(--muted);font-size:9px;opacity:.7}
 .fx-manual{margin-top:auto;padding-top:6px}
 .fx-kmhint{font-size:11px;color:var(--muted);margin-top:2px;text-align:right}
 .fx-fields-last{margin-bottom:12px}
@@ -1259,10 +1386,11 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   ${filtersSection(rows, s)}
   ${changesPanel(prev, cur)}
   <div class="grid2">${decisionStrip(rows)}${insightsBox(rows, s)}</div>
-  ${dailyTrend(rows)}
+  ${dailyTrend(rows, s)}
   ${tripsTable(rows)}
   ${breakdowns(rows, thr)}
-  ${worstList(rows)}
+  ${worstList(rows, s)}
+  ${dataQuality(rows, s)}
   <footer>Дані: data.json · формули: src/lib.ts · поріг ${thr} грн/км чистими</footer>
 </div>
 <script>
