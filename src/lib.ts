@@ -304,19 +304,79 @@ function round(n: number, d = 2): number {
 // ── 3 постійні слоти Автопілота ──────────────────────────────────────
 
 /**
- * Чи пройде замовлення крізь слот — точна семантика фільтра Uklon:
+ * Цінова частина слота — усе, крім радіуса подачі:
  *   `сума ≥ Мін.вартість` І `сума ≥ ₴/км × max(дистанція, Км-у-мінімалці)`.
- * (Інференс із поведінки фільтра, не з документації.)
+ * Винесено окремо, бо `earnedPickupKm` виводить радіус саме з цінового порогу
+ * (інакше вийшло б колове визначення: радіус із набору, відібраного радіусом).
  */
-export function slotPass(r: Row, s: import("./types.ts").Slot): boolean {
+export function slotPassPrice(r: Row, s: import("./types.ts").Slot): boolean {
   if (r.longHaul) return false; // міжміський — Автопілот off
   if (r.zone !== "Місто") {
     if (s.city_only || s.price_km_suburb == null) return false;
   }
   if (r.amount < s.min_order) return false;
-  if (r.pickup_km != null && r.pickup_km > s.max_pickup_km) return false;
   const p = r.zone === "Місто" ? s.price_km : (s.price_km_suburb as number);
   return r.amount >= p * Math.max(r.distance, s.km_in_min);
+}
+
+/**
+ * Чи пройде замовлення крізь слот — точна семантика фільтра Uklon:
+ *   `сума ≥ Мін.вартість` І `сума ≥ ₴/км × max(дистанція, Км-у-мінімалці)`
+ *   І `подача ≤ Відстань`.
+ * Подача перевіряється лише коли відома (`pickup_km`), тож на старих поїздках
+ * (де її не збирали) слот поводиться як суто ціновий.
+ */
+export function slotPass(r: Row, s: import("./types.ts").Slot): boolean {
+  if (r.pickup_km != null && r.pickup_km > s.max_pickup_km) return false;
+  return slotPassPrice(r, s);
+}
+
+/**
+ * Ціна одного кілометра подачі, грн: пальне (їдеш порожнем) + час за цільовою
+ * ставкою. Темп руху беремо виміряний — `cycle_model.per_km_min`.
+ */
+export function pickupCostPerKm(s: Settings): number {
+  const pace = s.cycle_model?.per_km_min ?? 1.79;
+  return fuelPerKm(s) + (baseTargetPh(s) * pace) / 60;
+}
+
+/**
+ * Типова подача, яка **вже врахована** в моделі, км.
+ *
+ * Поки `pickup_km` не збирають, оцінюємо її з порожняку в пальному
+ * (`середня дистанція × empty_run_coef`). Щойно назбирається ≥20 замірів —
+ * рахуємо з факту. Це «нуль» відліку: `cycle_model` виміряна з інтервалів між
+ * замовленнями, тож типова подача сидить і в часі теж. Додавати її ще раз до
+ * газу/часу — подвійний рахунок; ми лише питаємо, скільки км ПОНАД неї
+ * замовлення здатне оплатити.
+ */
+export function typicalPickupKm(rows: Row[], s: Settings): number {
+  const known = rows.map((r) => r.pickup_km).filter((x): x is number => x != null);
+  if (known.length >= 20) return known.reduce((a, b) => a + b, 0) / known.length;
+  const avgKm = rows.length ? rows.reduce((a, r) => a + r.distance, 0) / rows.length : 0;
+  return avgKm * emptyCoefZone("Місто", s);
+}
+
+/**
+ * Радіус подачі, який слот **заробив** своїм ціновим порогом, км.
+ *
+ * Логіка: кожен км подачі коштує `pickupCostPerKm`. Замовлення може його
+ * оплатити рівно настільки, наскільки має надлишку над ціллю ₴/год. Беремо
+ * **10-й перцентиль** надлишку серед замовлень, які слот пропускає за ціною —
+ * тобто радіус витримують ~90% його потоку, а не лише середнє.
+ *
+ * Наслідок, який варто пам'ятати: радіус НЕ можна призначати окремо від ціни.
+ * Дешевий слот заробляє ~2 км, право на 3+ км дає лише поріг ~32 ₴/км.
+ */
+export function earnedPickupKm(rows: Row[], slot: import("./types.ts").Slot, s: Settings): number {
+  const pass = rows.filter((r) => slotPassPrice(r, slot));
+  if (pass.length < 5) return 2;
+  const T = baseTargetPh(s);
+  const sp = pass.map((r) => r.net - (T * r.timeMin) / 60).sort((a, b) => a - b);
+  const p10 = sp[Math.floor(0.1 * sp.length)];
+  const km = typicalPickupKm(rows, s) + p10 / pickupCostPerKm(s);
+  // Округлення до 0.5 км (у формі Uklon дрібніше не має сенсу) і розумні межі.
+  return Math.max(1, Math.min(4, Math.round(km * 2) / 2));
 }
 
 /** Бектест набору слотів (об'єднання за АБО). */
@@ -422,22 +482,27 @@ export function deriveSlots(rows: Row[], s: Settings): import("./types.ts").Slot
   // Ролі за «км у мінімалці»: менший — короткі/вершки, більший — довгі/преміум.
   chosen.sort((a, b) => a.km_in_min - b.km_in_min);
   const meta = [
-    { id: "cream", name: "Вершки", icon: "🟢", role: "Короткі поруч: найвища ₴/км, мала подача — найкращий сегмент.", pickup: 1.5 },
-    { id: "work", name: "Робочий", icon: "🔵", role: "Основний потік міста. Тримає тебе зайнятим весь час.", pickup: 3 },
-    { id: "premium", name: "Преміум / довгі", icon: "🟣", role: "Довгі й передмістя — лише за високу суму (спрацьовує рідко).", pickup: 3 },
+    { id: "cream", name: "Вершки", icon: "🟢", role: "Короткі поруч: найвища ₴/км, мала подача — найкращий сегмент." },
+    { id: "work", name: "Робочий", icon: "🔵", role: "Основний потік міста. Тримає тебе зайнятим весь час." },
+    { id: "premium", name: "Преміум / довгі", icon: "🟣", role: "Довгі й передмістя — лише за високу суму (спрацьовує рідко)." },
   ];
-  return chosen.map((c, i) => ({
-    id: meta[i]?.id ?? `slot${i}`,
-    name: meta[i]?.name ?? `Слот ${i + 1}`,
-    icon: meta[i]?.icon ?? "⚪",
-    role: meta[i]?.role ?? "",
-    price_km: c.price_km,
-    price_km_suburb: c.price_km_suburb,
-    km_in_min: c.km_in_min,
-    min_order: c.min_order,
-    max_pickup_km: meta[i]?.pickup ?? 3,
-    city_only: c.price_km_suburb == null,
-  }));
+  return chosen.map((c, i) => {
+    const sl: import("./types.ts").Slot = {
+      id: meta[i]?.id ?? `slot${i}`,
+      name: meta[i]?.name ?? `Слот ${i + 1}`,
+      icon: meta[i]?.icon ?? "⚪",
+      role: meta[i]?.role ?? "",
+      price_km: c.price_km,
+      price_km_suburb: c.price_km_suburb,
+      km_in_min: c.km_in_min,
+      min_order: c.min_order,
+      max_pickup_km: 3, // тимчасово; нижче заміниться на зароблений
+      city_only: c.price_km_suburb == null,
+    };
+    // Радіус виводимо з цінового порогу слота, а не задаємо константою:
+    // дешевий слот не має права на далеку подачу.
+    return { ...sl, max_pickup_km: earnedPickupKm(rows, sl, s) };
+  });
 }
 
 // ── Знімок стану для дифу між запусками ──────────────────────────────
