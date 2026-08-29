@@ -18,6 +18,8 @@ venv/
 *.xlsx
 report.html
 .report-state.json
+# Бекапи міграції (src/migrate.ts --write)
+*.bak
 
 # Тимчасові файли OCR
 /tmp/ocr.txt

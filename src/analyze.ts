@@ -1,5 +1,6 @@
-// Швидкий per-trip аналіз у консоль (аналог analyze.py)
-import { loadData, fuelPerKm, breakeven, compute } from "./lib.ts";
+// Швидкий per-trip аналіз у консоль
+import { loadData, fuelPerKm, breakevenZone, compute } from "./lib.ts";
+import { fmtShort } from "./time.ts";
 
 const data = loadData();
 const s = data.settings;
@@ -7,15 +8,18 @@ const fpk = fuelPerKm(s);
 
 const pad = (v: string | number, n: number) => String(v).padStart(n);
 
+// Беззбитковість по зонах: усередненого числа більше немає — порожняк у місті
+// (0.3) і в тупику (1.0) відрізняється втричі.
 console.log(
-  `Паливо/км: ${fpk.toFixed(2)} грн/км | з порожняком: ${breakeven(s).toFixed(2)} грн/км`,
+  `Паливо/км: ${fpk.toFixed(2)} грн/км | з порожняком: місто ` +
+    `${breakevenZone(s, "Місто").toFixed(2)} · тупик ${breakevenZone(s, "Глухий кут").toFixed(2)} грн/км`,
 );
 console.log("-".repeat(64));
 
 for (const t of data.trips) {
   const c = compute(t, s);
   console.log(
-    `${t.datetime}  ${pad(t.amount, 3)}грн ${pad(t.distance.toFixed(2), 5)}км  ` +
+    `${fmtShort(t.datetime, s)}  ${pad(t.amount, 3)}грн ${pad(t.distance.toFixed(2), 5)}км  ` +
       `грн/км=${pad(c.grossPerKm.toFixed(1), 5)}  ` +
       `чист/км=${pad(c.netPerKm.toFixed(1), 5)}  ` +
       `₴/год=${pad(Math.round(c.netPerHour), 4)}  ${t.zone}`,

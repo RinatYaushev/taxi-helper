@@ -1,12 +1,14 @@
-// Категоризований звіт: дистанція / зона / година / оплата (аналог report.py)
-import { loadData, breakeven, enrich } from "./lib.ts";import type { Row } from "./types.ts";
+// Категоризований звіт: дистанція / зона / година / оплата
+import { loadData, breakevenZone, enrich, baseTargetPh } from "./lib.ts";
+import type { Row } from "./types.ts";
+import { fmtShort, hourOf as hourOfDt } from "./time.ts";
 
 const data = loadData();
 const s = data.settings;
-const thr = s.threshold_net_per_km;
+const target = baseTargetPh(s);
 const rows = enrich(data);
 
-const hourOf = (r: Row) => Number(r.datetime.split(" ")[1].split(":")[0]);
+const hourOf = (r: Row): number => hourOfDt(r.datetime, s);
 
 function block(name: string, sub: Row[]): void {
   if (!sub.length) return;
@@ -17,19 +19,22 @@ function block(name: string, sub: Row[]): void {
   const npk = km ? net / km : 0;
   const mins = sub.reduce((a, r) => a + r.timeMin, 0);
   const nph = mins ? net / (mins / 60) : 0;
-  const bad = sub.filter((r) => r.netPerKm < thr).length;
+  // «Погані» — за ЄДИНОЮ шкалою ₴/год (rec), а не за ₴/км: інакше консоль
+  // суперечила б звіту й слотам, як це вже було.
+  const bad = sub.filter((r) => r.rec !== "бери").length;
   console.log(
     `${name.padEnd(22)} | n=${String(n).padStart(2)} | ` +
       `виручка=${String(Math.round(amt)).padStart(5)} | ` +
       `чист=${String(Math.round(net)).padStart(6)} | ` +
       `чист/км=${npk.toFixed(1).padStart(5)} | ` +
       `₴/год=${String(Math.round(nph)).padStart(4)} | ` +
-      `нижче порогу=${String(bad).padStart(2)} (${String(Math.round((bad / n) * 100)).padStart(3)}%)`,
+      `нижче цілі=${String(bad).padStart(2)} (${String(Math.round((bad / n) * 100)).padStart(3)}%)`,
   );
 }
 
 console.log(
-  `Поріг «доброї» поїздки: ${thr} грн/км чистими | беззбитк.=${breakeven(s).toFixed(1)}`,
+  `Ціль: ${Math.round(target)} ₴/год чистими | беззбитк. палива: місто ` +
+    `${breakevenZone(s, "Місто").toFixed(1)} · тупик ${breakevenZone(s, "Глухий кут").toFixed(1)} грн/км`,
 );
 console.log("=".repeat(92));
 console.log("ЗА ДИСТАНЦІЄЮ");
@@ -60,12 +65,12 @@ for (const p of ["Готівка", "Безготівка", "Комбінован
 }
 console.log("=".repeat(92));
 
-const worst = [...rows].sort((a, b) => a.netPerKm - b.netPerKm).slice(0, 8);
-console.log("НАЙГІРШІ 8 (кандидати відсікати):");
+const worst = [...rows].sort((a, b) => a.netPerHour - b.netPerHour).slice(0, 8);
+console.log("НАЙГІРШІ 8 за ₴/год (кандидати відсікати):");
 for (const r of worst) {
   console.log(
-    `  ${r.datetime} ${String(r.amount).padStart(3)}грн ` +
-      `${r.distance.toFixed(2).padStart(5)}км чист/км=${r.netPerKm.toFixed(1).padStart(4)}  ` +
+    `  ${fmtShort(r.datetime, s)} ${String(r.amount).padStart(3)}грн ` +
+      `${r.distance.toFixed(2).padStart(5)}км ₴/год=${String(Math.round(r.netPerHour)).padStart(4)}  ` +
       `${r.zone.padEnd(10)} ${r.from.slice(0, 22).padEnd(22)}→ ${r.to.slice(0, 22)}`,
   );
 }

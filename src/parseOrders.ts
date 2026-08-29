@@ -11,8 +11,9 @@
 // Якорі парсингу (надійні): дата "DD міс. HH:MM", сума перед "₴", дистанція "N,NN км".
 // Адреси збираються злиттям перенесених рядків за балансом дужок; призначення (to) —
 // остання адреса. Зона визначається автоматично через inArea(to, dead_end_areas).
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { loadData, saveData, inArea } from "./lib.ts";
+import { defaultYear, parseDT } from "./time.ts";
 import type { Trip, Zone, Payment } from "./types.ts";
 
 const MONTH: Record<string, string> = { січ: "01", лют: "02", бер: "03", квіт: "04", трав: "05", черв: "06", лип: "07", серп: "08", вер: "09", жовт: "10", лист: "11", груд: "12" };
@@ -32,13 +33,16 @@ function normFare(n: number): number | null {
 }
 
 /** Парсить рядок розбивки оплати "Оплата замовлення" (детальний екран):
- *    "66 ₴ готівкою, 45 ₴ на баланс"  → { amount: 111, payment: "Комбінована" }
- *    "111 ₴ готівкою"                 → { amount: 111, payment: "Готівка" }
- *    "111 ₴ на баланс"                → { amount: 111, payment: "Безготівка" }
+ *    "66 ₴ готівкою, 45 ₴ на баланс"  → { amount: 111, balance: 45, payment: "Комбінована" }
+ *    "111 ₴ готівкою"                 → { amount: 111, balance: 0,  payment: "Готівка" }
+ *    "111 ₴ на баланс"                → { amount: 111, balance: 111, payment: "Безготівка" }
  *  Це НАЙНАДІЙНІШЕ джерело суми: не залежить від шуму іконки оплати зліва
  *  (напр. "9111"→111), бо сума = арифметика частин. Заодно однозначно дає тип
- *  оплати. Повертає null, якщо рядка розбивки немає (скрін-список) → fallback. */
-function parsePaymentBreakdown(lines: string[]): { amount: number; payment: Payment } | null {
+ *  оплати **і розмір безготівкової частини** — саме з неї береться комісія за
+ *  вивід (раніше ця частина губилась, і «Комбінована» рахувалась дешевшою). */
+function parsePaymentBreakdown(
+  lines: string[],
+): { amount: number; balance: number; payment: Payment } | null {
   for (const ln of lines) {
     if (/Рух коштів|Транзакці/i.test(ln)) continue; // секція історії балансу — не оплата
     const hasCash = /готівк/i.test(ln);
@@ -49,7 +53,10 @@ function parsePaymentBreakdown(lines: string[]): { amount: number; payment: Paym
     const amount = nums.reduce((a, b) => a + b, 0);
     if (amount < 40 || amount > 2000) continue;
     const payment: Payment = hasCash && hasBalance ? "Комбінована" : hasCash ? "Готівка" : "Безготівка";
-    return { amount, payment };
+    // Порядок у рядку: спершу готівка, потім баланс — беремо останнє число.
+    const balance =
+      payment === "Комбінована" ? nums[nums.length - 1] : payment === "Безготівка" ? amount : 0;
+    return { amount, balance, payment };
   }
   return null;
 }
@@ -130,12 +137,13 @@ function readBlocks(ocrText: string): Block[] {
 
 interface Parsed { trip: Trip; file: string; ok: boolean; viaBreakdown: boolean }
 
-function parseBlock(b: Block, dead: string[]): Parsed {
+function parseBlock(b: Block, dead: string[], year: number): Parsed {
   const L = b.lines;
   let datetime: string | null = null;
   for (const ln of L) {
     const m = ln.match(/(\d{1,2})\s+(січ|лют|бер|квіт|трав|черв|лип|серп|вер|жовт|лист|груд)\.?\s+(\d{1,2}):(\d{2})/);
-    if (m) { datetime = `${pad(+m[1])}.${MONTH[m[2]]} ${pad(+m[3])}:${m[4]}`; break; }
+    // Канон — ISO з роком: без нього ключ дня зливає серпень різних років.
+    if (m) { datetime = `${year}-${MONTH[m[2]]}-${pad(+m[1])} ${pad(+m[3])}:${m[4]}`; break; }
   }
   // дистанція (км без урахування регістру)
   let kmIdx = -1;
@@ -203,12 +211,16 @@ function parseBlock(b: Block, dead: string[]): Parsed {
   const zone: Zone = inArea(to, dead) ? "Глухий кут" : "Місто";
 
   const ok = !!datetime && amount != null && distance != null && !!to && from !== to;
+  const payment: Payment = payViaBreakdown && bd ? bd.payment : "Безготівка";
   const trip: Trip = {
     datetime: datetime ?? "",
     // Тип оплати з розбивки лише коли вона достовірно пояснює всю суму (payViaBreakdown).
     // Інакше плейсхолдер; update-pay уточнить за кольором іконки.
-    payment: payViaBreakdown && bd ? bd.payment : "Безготівка",
+    payment,
     amount: amount ?? 0,
+    // Безготівкову частину зберігаємо саме тут: комісія за вивід береться з неї,
+    // а не з усієї суми.
+    ...(payViaBreakdown && bd && payment === "Комбінована" ? { amount_balance: bd.balance } : {}),
     distance: distance ?? 0,
     from,
     to,
@@ -222,20 +234,34 @@ const args = process.argv.slice(2);
 const write = args.includes("--write");
 const ocrPath = args.find((a) => !a.startsWith("--")) ?? "/tmp/ocr.txt";
 
+// Без цієї перевірки крок конвеєра падав сирим ENOENT-стектрейсом — а причина
+// майже завжди одна: не зроблено крок OCR.
+if (!existsSync(ocrPath)) {
+  console.error(`❌ Немає файлу з OCR-текстом: ${ocrPath}`);
+  console.error("   Спершу зроби OCR:  swift ocr.swift ~/Desktop/screens > /tmp/ocr.txt");
+  console.error("   Або вкажи свій шлях:  node src/parseOrders.ts /шлях/ocr.txt");
+  process.exit(1);
+}
+
 const data = loadData();
 const dead = data.settings.dead_end_areas;
-const have = new Set(data.trips.map((t) => t.datetime));
+const year = defaultYear(data.settings);
+// Дедуп за МОМЕНТОМ часу, а не за рядком: у базі можуть бути старі записи
+// без року, а парсер тепер пише ISO.
+const keyOf = (dt: string): string => String(parseDT(dt, data.settings)?.abs ?? dt);
+const have = new Set(data.trips.map((t) => keyOf(t.datetime)));
 
 const blocks = readBlocks(readFileSync(ocrPath, "utf8"));
-const parsed = blocks.map((b) => parseBlock(b, dead));
+const parsed = blocks.map((b) => parseBlock(b, dead, year));
 const okRows = parsed.filter((p) => p.ok);
 const bad = parsed.filter((p) => !p.ok);
-const fresh = okRows.filter((p) => !have.has(p.trip.datetime));
+const fresh = okRows.filter((p) => !have.has(keyOf(p.trip.datetime)));
 const seen = new Set<string>();
 const toAdd: Trip[] = [];
 for (const p of fresh) {
-  if (seen.has(p.trip.datetime)) continue; // внутрішні дублі
-  seen.add(p.trip.datetime);
+  const k = keyOf(p.trip.datetime);
+  if (seen.has(k)) continue; // внутрішні дублі
+  seen.add(k);
   toAdd.push(p.trip);
 }
 
