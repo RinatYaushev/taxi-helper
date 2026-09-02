@@ -1,7 +1,7 @@
 // Таблиця поїздок, зведення по групах, найгірші.
 import type { Row, Settings } from "../../types.ts";
 import { baseTargetPh, groupStats, marginalTargetPh, phOf } from "../../lib.ts";
-import { fmtShort, hourOf } from "../../time.ts";
+import { fmtShort, hourOf, parseDT } from "../../time.ts";
 import { esc, f1, f2, money } from "../format.ts";
 
 export function tripsTable(rows: Row[], s: Settings): string {
@@ -16,13 +16,13 @@ export function tripsTable(rows: Row[], s: Settings): string {
           : `<span class="tag tag-city">Місто</span>`;
       return `
       <tr data-rec="${r.rec}" data-amount="${r.amount}" data-dist="${r.distance}" data-zone="${esc(r.zone)}" data-longhaul="${r.longHaul ? 1 : 0}"${r.pickup_km != null ? ` data-pickup="${r.pickup_km}"` : ""}>
-        <td class="nowrap">${esc(fmtShort(r.datetime, s))}</td>
+        <td class="nowrap" data-sort="${parseDT(r.datetime, s)?.abs ?? 0}">${esc(fmtShort(r.datetime, s))}</td>
         <td>${esc(r.payment)}</td>
         <td class="num">${money(r.amount)}</td>
         <td class="num">${f2(r.distance)}</td>
         <td class="num${r.pickup_km == null ? " dim" : ""}">${r.pickup_km != null ? f1(r.pickup_km) : "—"}</td>
-        <td class="addr">${esc(r.from)}</td>
-        <td class="addr">${esc(r.to)}</td>
+        <td class="addr" title="${esc(r.from)}">${esc(r.from)}</td>
+        <td class="addr" title="${esc(r.to)}">${esc(r.to)}</td>
         <td>${zoneTag}</td>
         <td class="num">${money(r.gas)}</td>
         <td class="num">${money(r.net)}</td>
@@ -42,7 +42,7 @@ export function tripsTable(rows: Row[], s: Settings): string {
     "Дата/час", "Оплата", "Сума", "Км", "Подача, км", "Звідки", "Куди",
     "Зона", "Газ", "Чистий", "грн/км", "Чист/км", "₴/год", "Дія",
   ];
-  const numeric = new Set([2, 3, 4, 8, 9, 10, 11, 12]);
+  const numeric = new Set([0, 2, 3, 4, 8, 9, 10, 11, 12]);
   const ths = headers
     .map((h, i) => `<th data-col="${i}" data-num="${numeric.has(i) ? 1 : 0}">${h}<span class="arrow"></span></th>`)
     .join("");
@@ -51,7 +51,7 @@ export function tripsTable(rows: Row[], s: Settings): string {
       <div class="table-head">
         <h3>Поїздки (${rows.length})</h3>
         <div class="filters">
-          <input id="search" class="search" type="search" placeholder="🔍 адреса / дата…">
+          <input id="search" class="search" type="search" placeholder="🔍 адреса / дата…" aria-label="Пошук за адресою або датою">
           <button class="fbtn active" data-f="all">Усі</button>
           <button class="fbtn" data-f="бери">🟢 бери</button>
           <button class="fbtn" data-f="думай">🟡 думай</button>
@@ -155,4 +155,3 @@ export function worstList(rows: Row[], s: Settings): string {
       <ul class="worst">${items}</ul>
     </div>`;
 }
-

@@ -39,10 +39,15 @@ header .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:7px 9px;text-align:left;border-bottom:1px solid var(--line)}
 th{color:var(--muted);font-weight:600;font-size:12px;white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{color:var(--accent)}
 th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .nowrap{white-space:nowrap}
-.addr{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151}
+.addr{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151;cursor:default}
+.addr-tip{position:fixed;z-index:50;max-width:320px;background:var(--ink);color:#fff;font-size:12px;line-height:1.4;
+  padding:6px 9px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.18);pointer-events:none;white-space:normal;
+  opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s}
+.addr-tip.show{opacity:1;transform:translateY(0)}
 .table-wrap{overflow:auto;max-height:640px;margin:0 -20px -18px;border-top:1px solid var(--line)}
 .table-wrap table{min-width:900px}
 .table-wrap thead th{position:sticky;top:0;background:#f9fafb;z-index:5}
@@ -53,11 +58,13 @@ th .arrow{margin-left:4px;font-size:10px;color:var(--accent)}
 .badge-бери{background:var(--good-bg);color:var(--good)}
 .badge-думай{background:var(--warn-bg);color:var(--warn)}
 .badge-пропускай{background:var(--bad-bg);color:var(--bad)}
-.tag{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:600;margin:2px 3px 2px 0}
+.tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;margin:3px 4px 3px 0}
 .tag-dead{background:#ffedd5;color:#c2410c}
 .tag-live{background:#e0f2fe;color:#0369a1}
 .tag-city{background:#f3f4f6;color:#4b5563}
 .tag-haul{background:#ede9fe;color:#6d28d9}
+.fx-tag-row{margin-top:8px;line-height:1.9}
+.fx-tag-row:first-of-type{margin-top:12px}
 .npk{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:6px;isolation:isolate}
 .npk-bar{position:absolute;left:0;top:50%;transform:translateY(-50%);height:16px;background:#dbeafe;border-radius:4px;z-index:0}
 .npk span{position:relative;z-index:1}
@@ -166,13 +173,13 @@ tr.slot-cut{opacity:.32}
 tr.slot-pass{background:#f0fdf4}
 tr.slot-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
 /* Якість даних */
-.dq-grid{display:flex;flex-direction:column;gap:10px}
-.dq-item{border-left:3px solid var(--line);padding:8px 12px;border-radius:0 6px 6px 0;background:rgba(255,255,255,.02)}
+.dq-grid{display:flex;flex-direction:column;gap:12px}
+.dq-item{border-left:3px solid var(--line);padding:10px 14px;border-radius:0 6px 6px 0;background:rgba(255,255,255,.02)}
 .dq-err{border-left-color:#e5484d;background:rgba(229,72,77,.07)}
 .dq-warn{border-left-color:#f5a524;background:rgba(245,165,36,.06)}
 .dq-info{border-left-color:#3b82f6;background:rgba(59,130,246,.05)}
-.dq-title{font-weight:700;font-size:12.5px;margin-bottom:3px}
-.dq-body{font-size:12px;color:var(--muted);line-height:1.6}
+.dq-title{font-weight:700;font-size:12.5px;margin-bottom:5px}
+.dq-body{font-size:12px;color:var(--muted);line-height:1.85}
 .dq-body code{font-size:11px}
 .bar-thin{color:var(--muted);font-size:9px;opacity:.7}
 /* Дифф-панель */
@@ -191,7 +198,7 @@ tr.slot-pass td:first-child{box-shadow:inset 3px 0 0 var(--good)}
 .chg-bt td.num,.chg-bt th.num{text-align:right}
 .worst{list-style:none;margin:0;padding:0}
 .worst li{display:grid;grid-template-columns:52px 1fr;grid-template-areas:"npk info" "npk route";
-  gap:2px 12px;padding:9px 0;border-bottom:1px solid var(--line)}
+  gap:4px 12px;padding:11px 0;border-bottom:1px solid var(--line)}
 .w-npk{grid-area:npk;align-self:center;font-size:20px;font-weight:700;color:var(--bad);text-align:center}
 .w-info{grid-area:info;font-size:13px}
 .w-route{grid-area:route;font-size:12px;color:var(--muted)}
@@ -257,5 +264,6 @@ footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
   .table-wrap{max-height:none;overflow:visible;margin:0;border-top:none}
   .table-wrap table{min-width:0}
   .table-wrap thead th{position:static}
+  .addr{max-width:none;white-space:normal;overflow:visible;text-overflow:clip}
 }
 `;

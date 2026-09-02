@@ -145,6 +145,20 @@ function parseBlock(b: Block, dead: string[], year: number): Parsed {
     // Канон — ISO з роком: без нього ключ дня зливає серпень різних років.
     if (m) { datetime = `${year}-${MONTH[m[2]]}-${pad(+m[1])} ${pad(+m[3])}:${m[4]}`; break; }
   }
+  if (!datetime) {
+    // Uklon не показує дату для замовлень "сьогодні" — лише час. Тоді дату
+    // беремо з ІМЕНІ файлу скріна (macOS: "Screenshot YYYY-MM-DD at HH.MM.SS"),
+    // а сам час замовлення шукаємо як "голий" рядок HH:MM. Статус-бар годинник
+    // на скрінах завжди йде зі сміттям поруч ("23:440", "23:45 C", "23:45 0°"),
+    // а справжній час замовлення — чистий рядок без жодних інших символів.
+    const fileDate = b.file.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (fileDate) {
+      for (const ln of L) {
+        const m = ln.trim().match(/^(\d{1,2}):(\d{2})$/);
+        if (m) { datetime = `${fileDate[1]}-${fileDate[2]}-${fileDate[3]} ${pad(+m[1])}:${m[2]}`; break; }
+      }
+    }
+  }
   // дистанція (км без урахування регістру)
   let kmIdx = -1;
   let distance: number | null = null;
@@ -287,5 +301,3 @@ if (write && toAdd.length) {
 } else if (!write) {
   console.log("dry-run (нічого не записано). Додай --write, щоб дописати в data.json.");
 }
-
-

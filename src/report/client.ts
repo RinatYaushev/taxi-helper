@@ -40,6 +40,33 @@ function downloadCSV(){
   URL.revokeObjectURL(a.href);
 }
 function downloadPDF(){ window.print(); }
+// Власний тултіп для обрізаних адрес: нативний title у Chrome і масштаб не
+// показуємо стабільно (скасовується будь-яким рухом миші, затримка ~1.5с),
+// тож малюємо власну плашку — вона з'являється одразу і не зникає передчасно.
+(function(){
+  var tip=document.createElement("div");
+  tip.className="addr-tip";
+  document.body.appendChild(tip);
+  var cur=null;
+  document.querySelectorAll("#trips td.addr").forEach(function(td){
+    td.addEventListener("mouseenter",function(){
+      if(td.scrollWidth<=td.clientWidth)return; // не обрізано — тултіп не потрібен
+      cur=td;
+      tip.textContent=td.getAttribute("title")||td.textContent;
+      tip.classList.add("show");
+    });
+    td.addEventListener("mousemove",function(e){
+      if(cur!==td)return;
+      var x=e.clientX+14, y=e.clientY+16;
+      var maxX=window.innerWidth-tip.offsetWidth-8;
+      tip.style.left=Math.min(x,Math.max(8,maxX))+"px";
+      tip.style.top=Math.min(y,window.innerHeight-tip.offsetHeight-8)+"px";
+    });
+    td.addEventListener("mouseleave",function(){
+      if(cur===td){cur=null;tip.classList.remove("show");}
+    });
+  });
+})();
 (function(){
   var btn=document.getElementById("dlBtn"), menu=document.getElementById("dlMenu");
   function close(){menu.classList.remove("open");btn.setAttribute("aria-expanded","false");}
@@ -66,9 +93,11 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
     th.querySelector(".arrow").textContent=dir===1?"▲":"▼";
     var rows=[].slice.call(tb.querySelectorAll("tr"));
     rows.sort(function(a,b){
-      var x=a.children[idx].innerText.trim(), y=b.children[idx].innerText.trim();
-      if(num){return (parseFloat(x.replace(/\\s/g,"").replace("—","NaN"))-parseFloat(y.replace(/\\s/g,"").replace("—","NaN")))*dir;}
-      return x.localeCompare(y,"uk")*dir;
+      var ca=a.children[idx], cb=b.children[idx];
+      var x=ca.dataset.sort!=null?ca.dataset.sort:ca.innerText.trim();
+      var y=cb.dataset.sort!=null?cb.dataset.sort:cb.innerText.trim();
+      if(num){return (parseFloat(String(x).replace(/\\s/g,"").replace("—","NaN"))-parseFloat(String(y).replace(/\\s/g,"").replace("—","NaN")))*dir;}
+      return String(x).localeCompare(String(y),"uk")*dir;
     });
     rows.forEach(function(r){tb.appendChild(r)});
   });
@@ -107,4 +136,3 @@ document.querySelectorAll("#trips thead th").forEach(function(th){
   });
 })();
 `;
-
