@@ -61,25 +61,31 @@ function parsePaymentBreakdown(
   return null;
 }
 
-/** Чи схожий рядок на адресу (а не на UI-хром/мапу/статус-бар). */
-function isAddr(s: string): boolean {
+/** Чи рядок — точно НЕ адреса (UI-хром/мапа/статус-бар/сміття OCR).
+ *  Раніше тут була позитивна перевірка (рядок мав збігтись з відомим
+ *  ключовим словом — Вулиця/Шосе/ТЦ/...), і вона мовчки викидала легітимні
+ *  рядки без ключових слів: голий номер будинку ("20", "15"), назви без
+ *  розпізнаного типу вулиці ("Госпіталь Ветеранів Війни"), елементи
+ *  доадресного тексту. Викинутий рядок не потрапляв у `joinAddrs`, і той
+ *  зшивав докупи ДВІ РІЗНІ адреси через "хвіст-кому" — на виході лишалась
+ *  ОДНА адреса замість двох, і блок ішов у «проблемні» (справжній інцидент:
+ *  9 блоків 03/06.09.2026 через саме цей механізм). Тепер приймаємо все, що
+ *  не є явним сміттям — позитивний список ключових слів більше не потрібен. */
+function isJunk(s: string): boolean {
   const t = s.trim();
-  if (!t) return false;
-  if (/^\*{2,}/.test(t)) return false;
-  if (/\$/.test(t)) return false; // статус-бар "(40• $"
-  if (/^\(?\d{1,3}\s*[•·*)]/.test(t)) return false; // "(38)•$", "(45 *"
-  if (/tall|tatill|4G|3G|LTE|^H$|^T\b/.test(t)) return false;
-  if (/^[•·.…\s]+$/.test(t)) return false;
-  if (/^Mi 9 SE$/.test(t)) return false;
-  if (/Деталі замовлення|ID замовлення|Архівне|Рух коштів|Транзакці|Зміни|Активност|Google|Баланс|Оплата/.test(t)) return false;
-  if (/\d+\s*₴/.test(t)) return false;
-  if (/\d+[.,]\d+\s*км/i.test(t)) return false;
-  if (/(серп|лип|черв|вер|січ|лют|бер|квіт|трав|жовт|лист|груд)\./.test(t)) return false;
-  if (/^\d{1,2}:\d{2}/.test(t)) return false;
-  if (/(Вулиц|Вул\.|Шосе|Провул|Пров\.|Проспект|Просп|Площ|Бульвар|ЖК|ТЦ|ТРЦ|Осбб|Лікарн|Університ|Вокзал|Епіцентр|Мегамол|Парк|Готель|Ресторан|Магазин|Заправ|Ринок|Салон|Аптек|Школ|Садо?к|Комплекс|Зупин|Зуп\.|Музей)/i.test(t)) return true;
-  if (/^\(/.test(t)) return true;
-  if (/\)\s*$/.test(t)) return true;
-  if (/,\s*\d+[а-яіїєґ/\-\d]*$/.test(t)) return true;
+  if (!t) return true;
+  if (/^\*{2,}/.test(t)) return true;
+  if (/\$/.test(t)) return true; // статус-бар "(40• $"
+  if (/^\(?\d{1,3}\s*[•·*)]/.test(t)) return true; // "(38)•$", "(45 *"
+  if (/tall|tatill|4G|3G|LTE|^H$|^T\b/.test(t)) return true;
+  if (/^[•·.…\s]+$/.test(t)) return true;
+  if (/^[A-Za-zА-Яа-яІЇЄҐіїєґ]{1,2}[-–—]?$/.test(t)) return true; // короткий OCR-артефакт типу "O-"
+  if (/^Mi\s*9\s*SE$/.test(t)) return true;
+  if (/Деталі замовлення|ID замовлення|Архівне|Рух коштів|Транзакці|Зміни|Активност|Google|Баланс|Оплата/.test(t)) return true;
+  if (/\d+\s*₴/.test(t)) return true;
+  if (/\d+[.,]\d+\s*км/i.test(t)) return true;
+  if (/(серп|лип|черв|вер|січ|лют|бер|квіт|трав|жовт|лист|груд)\./.test(t)) return true;
+  if (/^\d{1,2}:\d{2}/.test(t)) return true;
   return false;
 }
 
@@ -104,7 +110,10 @@ function cleanAddr(t: string): string {
  *  народжувались поїздки з `from === to` (перевір панель «Якість даних»). */
 const MAX_MERGE = 2;
 
-/** Зливає перенесені адресні рядки (незбалансовані дужки / хвіст-кома / "(" на початку). */
+/** Зливає перенесені адресні рядки (незбалансовані дужки / хвіст-кома /
+ *  хвіст-«Вихід» / "(" на початку наступного). Хвіст-«Вихід» покриває типовий
+ *  розрив Uklon «...Вихід» + «Центральний»/«На ... Шосе» на окремому рядку —
+ *  без ключового слова в другій половині цей розрив нічим іншим не зловити. */
 function joinAddrs(arr: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < arr.length; i++) {
@@ -114,7 +123,7 @@ function joinAddrs(arr: string[]): string[] {
       const next = arr[i + 1].trim();
       const opens = (cur.match(/\(/g) || []).length;
       const closes = (cur.match(/\)/g) || []).length;
-      if (opens > closes || /,\s*$/.test(cur) || /^\(/.test(next)) { cur += " " + next; i++; merged++; }
+      if (opens > closes || /,\s*$/.test(cur) || /Вихід\s*$/i.test(cur) || /^\(/.test(next)) { cur += " " + next; i++; merged++; }
       else break;
     }
     out.push(cleanAddr(cur));
@@ -214,7 +223,7 @@ function parseBlock(b: Block, dead: string[], year: number): Parsed {
   // адреси до km
   const limit = kmIdx >= 0 ? kmIdx : L.length;
   const addrLines: string[] = [];
-  for (let i = 0; i < limit; i++) if (isAddr(L[i])) addrLines.push(L[i]);
+  for (let i = 0; i < limit; i++) if (!isJunk(L[i])) addrLines.push(L[i]);
   const joined = joinAddrs(addrLines);
   // Екран замовлення завжди показує ДВІ адреси. Якщо ми витягли лише одну —
   // це збій розпізнавання, а не поїздка «сама в себе». Раніше тут стояло
