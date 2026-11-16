@@ -340,3 +340,63 @@ test("довга поїздка «по місту» позначається я�
     .join(" | ");
   assert.doesNotMatch(manual, /Довга поїздка з зоною «Місто»/);
 });
+
+test("бізнес-клас не впливає на підбір слотів, але йде в бектест", () => {
+  // Регресія-запобіжник: дорогі поїздки (50–70 ₴/км) проходять будь-який поріг,
+  // і якщо їх лишити в підборі, плато розширюється, а радіус подачі росте.
+  const std: Trip[] = [];
+  for (let d = 0; d < 6; d++) {
+    for (let i = 0; i < 12; i++) {
+      const dist = 2 + ((i * 7) % 11);
+      std.push(
+        trip({
+          datetime: `2026-08-${String(10 + d).padStart(2, "0")} ${String(17 + Math.floor(i / 3)).padStart(2, "0")}:${String((i * 13) % 60).padStart(2, "0")}`,
+          amount: Math.round(80 + dist * (18 + (i % 5) * 3)),
+          distance: dist,
+        }),
+      );
+    }
+  }
+  const biz: Trip[] = [];
+  // 3 на день (18 на 72 стандартні) — перевірено мутацією: без фільтра в
+  // `deriveSlots` тут з'являється зайвий 2-й слот і міняється радіус 1-го.
+  // Залежність від обсягу немонотонна (на 6+/день збігається випадково),
+  // тож число не міняти без повторної перевірки мутацією.
+  const BIZ_PER_DAY = 3;
+  for (let d = 0; d < 6; d++) {
+    for (let k = 0; k < BIZ_PER_DAY; k++) {
+      const dist = 4 + (k % 8);
+      biz.push(
+        trip({
+          datetime: `2026-08-${String(10 + d).padStart(2, "0")} 21:${String(2 + k * 4).padStart(2, "0")}`,
+          amount: dist * (50 + (k % 3) * 10),
+          distance: dist,
+          tariff_class: "Бізнес",
+        }),
+      );
+    }
+  }
+  const rowsOf = (ts: Trip[]) => ts.map((t) => ({ ...t, ...compute(t, S) }));
+  const strip = (xs: Slot[]) => xs.map(({ stability: _s, ...rest }) => rest);
+  const a = deriveSlots(rowsOf(std), S);
+  const b = deriveSlots(rowsOf([...std, ...biz]), S);
+  assert.deepEqual(strip(b), strip(a), "бізнес-поїздки змінили пороги слотів");
+
+  // А бектест бачить увесь потік: бізнес проходить слоти.
+  const st = slotsStats(rowsOf([...std, ...biz]), b);
+  assert.equal(st.pass, slotsStats(rowsOf(std), a).pass + biz.length);
+});
+
+test("валідатор підказує бізнес без позначки, і мовчить, коли позначка є", () => {
+  const titles = (t: Trip) =>
+    validateData({ settings: S, trips: [t] })
+      .map((i) => `${i.level}:${i.title}`)
+      .join(" | ");
+  // 6 км × 65 ₴/км — схоже на бізнес у пік.
+  assert.match(titles(trip({ amount: 390, distance: 6 })), /info:Схоже на бізнес-клас без позначки: 1/);
+  assert.doesNotMatch(titles(trip({ amount: 390, distance: 6, tariff_class: "Бізнес" })), /Схоже на бізнес/);
+  // Короткі — мінімалка дає високий ₴/км і в стандарті, не тривожимо.
+  assert.doesNotMatch(titles(trip({ amount: 180, distance: 3 })), /Схоже на бізнес/);
+  // Стандарт у пік до 54 ₴/км (максимум історії) — теж мовчимо.
+  assert.doesNotMatch(titles(trip({ amount: 270, distance: 5 })), /Схоже на бізнес/);
+});

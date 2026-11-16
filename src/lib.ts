@@ -522,7 +522,14 @@ function candToSlot(c: Cand, pickup: number): Slot {
  * кута — окрема задача (див. панель фільтрів): `zone` визначається за
  * призначенням поїздки, а не позицією водія, тож фільтром вона не вирішується.
  */
-export function deriveSlots(rows: Row[], s: Settings): Slot[] {
+export function deriveSlots(allRows: Row[], s: Settings): Slot[] {
+  // Бізнес-клас проходить будь-який кандидатський поріг (50+ ₴/км), тож у
+  // виборі ціни він лише додає константу до всіх оцінок. Але константа не
+  // нейтральна: плато рахується ВІДНОСНО максимуму (PLATEAU_TOL) і розширюється,
+  // а 10-й перцентиль надлишку в `earnedPickupKm` росте — слоти м'якшали б і
+  // ширшали за подачею через замовлення, для яких фільтр нічого не вирішує.
+  // Тому пороги підбираються лише на стандарті; бектест (`slotsStats`) — на всіх.
+  const rows = allRows.filter((r) => r.tariff_class !== "Бізнес");
   const T = baseTargetPh(s);
   const surplus = rows.map((r) => r.net - (T * r.timeMin) / 60);
   const cands = candidates(s, T);

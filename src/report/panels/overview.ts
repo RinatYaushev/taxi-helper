@@ -163,6 +163,15 @@ export function insightsBox(rows: Row[], s: Settings): string {
     );
   }
   const sh = shiftStats(rows, s);
+  const biz = rows.filter((r) => r.tariff_class === "Бізнес");
+  if (biz.length) {
+    const std = rows.filter((r) => r.tariff_class !== "Бізнес");
+    items.push(
+      `💼 Бізнес-клас: <b>${biz.length}</b> з ${rows.length} поїздок, <b class="v-ok">${money(phOf(biz))}</b> грн/год
+       і ${f1(npk(biz))} грн/км проти стандарту ${money(phOf(std))} грн/год і ${f1(npk(std))} грн/км.
+       Слоти підбираються лише на стандарті: бізнес проходить будь-який поріг, а в підборі лише розмивав би його вниз.`,
+    );
+  }
   items.push(
     `🕒 Медіанна зміна: <b>${f1(sh.medianTrips)}</b> поїздок, <b>${f1(sh.medianHours)}</b> год,
      <b>${money(sh.medianNet)}</b> грн чистими. Зміна рахується розривом &gt;${(s.shift_gap_min ?? 240) / 60} год,

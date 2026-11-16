@@ -21,6 +21,15 @@ const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFin
 /** Понад стільки км «по місту» для компактної Вінниці — привід перевірити зону. */
 const FAR_CITY_KM = 15;
 
+/** Підказка «схоже на бізнес без позначки». Клас на скріні не видно, а ціна
+ *  класи надійно не розділяє: стандарт у пік сягає 50–54 ₴/км на 4+ км (макс.
+ *  53.7 на історії до 16.11.2026), бізнес — від ~50. Поріг узято вище за
+ *  стандартний максимум, щоб на старій базі було 0 хибних тривог; бізнес у пік
+ *  (60–70) він ловить, ненапружений (~50) — ні. Тому це лише `info`, а
+ *  джерело правди — позначка «бізнес» у журналі подачі. */
+export const BIZ_HINT_PPK = 55;
+const BIZ_HINT_MIN_KM = 4;
+
 /**
  * Для злиплої адреси (`from === to`): чи залежить зона від того, де її розрізати?
  *
@@ -70,6 +79,7 @@ export function validateData(data: Data): Issue[] {
   const badBalance: string[] = [];
   const dupes: string[] = [];
   const legacy: string[] = [];
+  const bizHint: string[] = [];
   const seen = new Map<string, number>();
 
   for (const t of trips) {
@@ -97,6 +107,11 @@ export function validateData(data: Data): Issue[] {
       badPickup.push(`${t.datetime}: подача ${t.pickup_km} км`);
     if (t.amount_balance != null && (t.amount_balance < 0 || t.amount_balance > t.amount))
       badBalance.push(`${t.datetime}: на баланс ${t.amount_balance} із ${t.amount}`);
+    if (
+      !t.tariff_class && isNum(t.amount) && isNum(t.distance) &&
+      t.distance >= BIZ_HINT_MIN_KM && t.amount / t.distance >= BIZ_HINT_PPK
+    )
+      bizHint.push(`${t.datetime} · ${t.amount} грн / ${t.distance} км = ${(t.amount / t.distance).toFixed(1)} ₴/км`);
     const key = `${t.datetime}|${t.amount}|${t.distance}`;
     seen.set(key, (seen.get(key) ?? 0) + 1);
   }
@@ -132,6 +147,12 @@ export function validateData(data: Data): Issue[] {
   ]);
   add("warn", `Підозріла подача: ${badPickup.length}`, badPickup);
   add("warn", `Розбивка оплати > суми: ${badBalance.length}`, badBalance);
+  add("info", `Схоже на бізнес-клас без позначки: ${bizHint.length}`, [
+    ...bizHint,
+    ...(bizHint.length
+      ? ['Якщо це бізнес — постав "tariff_class": "Бізнес" (інакше поїздка розмиває пороги слотів). Якщо стандарт у пік — ігноруй.']
+      : []),
+  ]);
   if (legacy.length) {
     add("warn", `Старий формат дати (без року): ${legacy.length}`, [
       `напр. «${legacy[0]}» — рік підставляється з settings.default_year (${s.default_year ?? "поточний"}).`,
