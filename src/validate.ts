@@ -64,6 +64,8 @@ export function validateData(data: Data): Issue[] {
   if (!s?.cycle_model) cfg.push("немає cycle_model — час рахується запасними коефіцієнтами (npm run calibrate --write)");
   if (s?.combined_balance_share != null && (s.combined_balance_share < 0 || s.combined_balance_share > 1))
     cfg.push("combined_balance_share поза 0..1");
+  if (s?.biz_slot && (!isNum(s.biz_slot.price_km) || s.biz_slot.price_km <= 0 || !isNum(s.biz_slot.min_order) || s.biz_slot.min_order <= 0))
+    cfg.push("biz_slot: price_km і min_order мають бути додатними числами");
   add("err", "Налаштування", cfg);
 
   // ── trips ──────────────────────────────────────────────────────────

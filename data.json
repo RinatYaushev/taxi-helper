@@ -12,6 +12,10 @@
     "threshold_net_per_km": 14,
     "marginal_net_per_km": 10,
     "target_net_per_hour": 240,
+    "biz_slot": {
+      "price_km": 50,
+      "min_order": 250
+    },
     "uklon_fare": {
       "base": 78.9,
       "per_km": 17.3

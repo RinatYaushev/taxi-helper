@@ -22,6 +22,12 @@ export interface Settings {
   marginal_net_per_km: number;
   /** Базова планка чистими за годину — ЄДИНА шкала рішень. */
   target_net_per_hour?: number;
+  /** Слот «Бізнес» — фіксовані ціна й мін. вартість (не підбираються з історії:
+   *  бізнесу в ній немає). Радіус рахується з них (`bizSlot`). Не задано → 50 / 250. */
+  biz_slot?: {
+    price_km: number;
+    min_order: number;
+  };
   /** Рік за замовчуванням для старого формату `datetime` ("DD.MM HH:MM"). */
   default_year?: number;
   /** Розрив між замовленнями (хв), більший за який вважається кінцем зміни.
@@ -194,6 +200,9 @@ export interface Slot {
   city_only: boolean;
   /** Діагностика підбору: наскільки стабільний цей поріг (див. `deriveSlots`). */
   stability?: SlotStability;
+  /** Лише для аналітичного слота «Бізнес»: найгірше замовлення, яке він
+   *  пропускає, — саме воно визначає радіус подачі. */
+  worstCase?: { amount: number; distance: number; netPerHour: number; surplus: number };
 }
 
 /**

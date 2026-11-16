@@ -1,4 +1,4 @@
-// Панель «Фільтри Автопілота»: 2 постійні слоти — і більше нічого.
+// Панель «Фільтри Автопілота»: постійні слоти (2 підібрані + «Бізнес») — і більше нічого.
 //
 // ⚠️ Тут колись була друга вкладка «4 режими з перемиканням». Її прибрано
 // свідомо: пороги режимів були афінними (`A + B×км`), а у формі Uklon такого
@@ -17,6 +17,25 @@ import {
   slotsStats,
 } from "../../lib.ts";
 import { esc, f1, money } from "../format.ts";
+
+/** Числівник для тексту інструкції: «два фільтри», «три фільтри». */
+const numWord = (n: number): string => ({ 1: "один", 2: "два", 3: "три", 4: "чотири" } as Record<number, string>)[n] ?? String(n);
+
+/** Звідки в слота «Бізнес» радіус — він не підібраний, а розрахований. */
+function bizNote(sl: Slot, T: number): string {
+  const w = sl.worstCase;
+  if (!w) return "";
+  return `
+    <div class="fx-stab">
+      Ціна й мін. вартість — з <code>settings.biz_slot</code>: бізнесу в історії
+      ще немає, підбирати нема з чого. Радіус рахується з <b>найгіршого</b>
+      замовлення, яке слот пропускає: <b>${w.amount} ₴ за ${f1(w.distance)} км</b>
+      (${w.netPerHour} ₴/год). Його надлишок над ціллю ${T} ₴/год окупає подачу до
+      <b>${sl.max_pickup_km} км</b>; усі інші, що пройдуть, вигідніші.
+      Без мін. вартості слот пропускав би й короткі поїздки за мінімалку, для яких
+      далека подача збиткова, — а поруч їх і так ловлять перші два слоти.
+    </div>`;
+}
 
 /** Картка слота — дзеркало форми фільтра в застосунку Uklon. */
 function slotFields(sl: Slot): string {
@@ -183,7 +202,7 @@ function deadEndEscapeNote(): string {
 }
 
 /** Спільні правила механіки фільтра Uklon. */
-function filtersCommon(rows: Row[], s: Settings): string {
+function filtersCommon(rows: Row[], s: Settings, n: number): string {
   const base = npkOf(rows);
   const uf = s.uklon_fare ?? { base: 81, per_km: 16.4 };
   const g = goldenRule(s);
@@ -205,7 +224,7 @@ function filtersCommon(rows: Row[], s: Settings): string {
         </div>
       </div>
       <div class="fx-rule">
-        <div class="fx-rule-t">2 активні фільтри, об'єднані за АБО</div>
+        <div class="fx-rule-t">${n} активні фільтри, об'єднані за АБО</div>
         <div class="fx-rule-note">Замовлення береться, якщо підходить під
           <b>будь-який</b> із увімкнених. Отже строгий фільтр нічого не блокує — він
           лише <b>додає</b>, і тримати його ввімкненим <b>безкоштовно</b>.
@@ -245,7 +264,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
   const cards = slots
     .map((sl) => {
       const ex = [2, 5, 10]
-        .map((d) => `${d} км → ${Math.round(sl.price_km * Math.max(d, sl.km_in_min))} ₴`)
+        .map((d) => `${d} км → ${Math.round(Math.max(sl.min_order, sl.price_km * Math.max(d, sl.km_in_min)))} ₴`)
         .join(" · ");
       const own = slotsStats(rows, [sl]);
       const mine = rows.filter((r) => slotPass(r, sl));
@@ -260,6 +279,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
         <div class="fx-group-title">⚙️ Поля фільтра — переписати як є</div>
         ${slotFields(sl)}
         ${stabilityNote(sl)}
+        ${bizNote(sl, T)}
         <div class="fx-bt">
           <div class="fx-bt-row"><span>Поріг суми</span><b>${esc(ex)}</b></div>
           <div class="fx-bt-row"><span>Ловить сам по собі</span>
@@ -307,10 +327,10 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
   return `
     <div class="panel fx-panel fx-hero">
       <div class="fx-hero-head">
-        <h3>🎯 Фільтри Автопілота — 2 постійні слоти</h3>
+        <h3>🎯 Фільтри Автопілота — ${slots.length} постійні слоти</h3>
         <span class="hint">⚙️ = поле у формі фільтра Uklon · 🔎 = підсвітити на історії</span>
       </div>
-      ${filtersCommon(rows, s)}
+      ${filtersCommon(rows, s, slots.length)}
 
       <div class="fx-approach">
         <div class="fx-approach-head">
@@ -321,7 +341,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
           </div>
         </div>
         <p class="fx-approach-p">
-          Два слоти вписуються у два активні фільтри Uklon і <b>лишаються ввімкненими
+          ${esc(numWord(slots.length)[0].toUpperCase() + numWord(slots.length).slice(1))} слоти вписуються у ${esc(numWord(slots.length))} активні фільтри Uklon і <b>лишаються ввімкненими
           назавжди</b>. Перемикати нічого не треба, і це не компроміс, а наслідок
           механіки: коли ти вже везеш клієнта, м'якший слот фізично не має шансу
           спрацювати — <b>твоя зайнятість сама грає роль «режиму»</b>.
@@ -333,7 +353,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
         <div class="fx-howto">
           <div class="fx-howto-title">Як користуватись</div>
           <ol class="fx-howto-list">
-            <li>Створи в Автопілоті <b>два фільтри</b> й перепиши поля з карток
+            <li>Створи в Автопілоті <b>${esc(numWord(slots.length))} фільтри</b> й перепиши поля з карток
               один-в-один — назви збігаються з формою застосунку.</li>
             <li>У блоці «Тариф» обери <b>саме ту вкладку, що вказана в картці</b>.
               «Простий» і «Складний» <b>взаємовиключні</b>: тумблер «Лише по місту»
@@ -341,7 +361,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
               Складному. Поля з <b>чужої</b> вкладки <b>ігноруються мовчки</b>.</li>
             <li>Постав кожному режим <b>«Цикл»</b>, а не «Авто»: в «Авто» фільтр
               гасне після кожного замовлення.</li>
-            <li>Увімкни <b>обидва одночасно</b> і більше не чіпай.</li>
+            <li>Увімкни <b>усі одночасно</b> і більше не чіпай.</li>
             <li>Якщо пропустити <b>обов'язкове</b> замовлення — автофільтри
               <b>вимикаються</b>. Після такого перевір, чи вони ще активні.</li>
             <li>Веди <b>журнал пропозицій</b> (панель нижче) — без нього ми не бачимо
@@ -354,9 +374,9 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
       ${sectorsNote(rows, s, slots)}
       ${deadEndEscapeNote()}
 
-      <div class="fx-switch-title">Як читати пару і який сетап обрати</div>
+      <div class="fx-switch-title">Як читати слоти і який сетап обрати</div>
       <div class="fx-note fx-note-top">
-        Слоти — це <b>драбина за подачею</b>, а не два різні «настрої».
+        Слоти — це <b>драбина за подачею</b>, а не різні «настрої».
         Кожен наступний <b>строгіший за ціною, але дозволяє їхати далі</b> по клієнта.
         Поточна розкладка: <b>${esc(ladder)}</b>.
         ${withPickup < 20

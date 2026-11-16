@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   balanceAmount,
+  bizSlot,
   breakevenZone,
   commissionOf,
   compute,
@@ -15,11 +16,13 @@ import {
   goldenRule,
   inArea,
   minGrossPerKmZone,
+  pickupCostPerKm,
   refillBreakeven,
   shiftStats,
   slotPass,
   slotPassAdditive,
   slotsStats,
+  typicalPickupKm,
 } from "./lib.ts";
 import { dayLabel, fmtISO, gapsWithinShifts, parseDT, shiftsOf } from "./time.ts";
 import { validateData } from "./validate.ts";
@@ -213,8 +216,8 @@ test("deriveSlots детермінований і не вкладений за �
   for (let i = 1; i < a.length; i++) {
     assert.ok(a[i].max_pickup_km > a[i - 1].max_pickup_km, "драбина за радіусом подачі");
   }
-  for (const sl of a) {
-    assert.ok(sl.stability, "кожен слот несе діагностику стабільності");
+  for (const sl of a.filter((x) => x.id !== "biz")) {
+    assert.ok(sl.stability, "кожен підібраний слот несе діагностику стабільності");
     assert.ok(sl.stability!.plateauLo <= sl.price_km && sl.price_km <= sl.stability!.plateauHi);
   }
 });
@@ -399,4 +402,57 @@ test("валідатор підказує бізнес без позначки, 
   assert.doesNotMatch(titles(trip({ amount: 180, distance: 3 })), /Схоже на бізнес/);
   // Стандарт у пік до 54 ₴/км (максимум історії) — теж мовчимо.
   assert.doesNotMatch(titles(trip({ amount: 270, distance: 5 })), /Схоже на бізнес/);
+});
+
+// ── Слот «Бізнес» ───────────────────────────────────────────────────
+const BIZ_S: Settings = { ...S, gas_consumption_l_100km: 9, gas_price_per_l: 90.9 };
+const bizRows = [trip(), trip({ distance: 3, amount: 120 })].map((t) => ({ ...t, ...compute(t, BIZ_S) }));
+
+test("Бізнес: радіус окупається навіть для НАЙГІРШОГО пропущеного замовлення", () => {
+  const sl = bizSlot(bizRows, BIZ_S)!;
+  assert.ok(sl, "слот є");
+  const w = sl.worstCase!;
+  // Найгірше — коли сума впирається в мін. вартість: d = 250 / 50 = 5 км.
+  assert.equal(w.amount, 250);
+  assert.ok(Math.abs(w.distance - 5) < 0.11);
+  // Подача до радіуса не з'їдає надлишок найгіршого замовлення.
+  const extra = sl.max_pickup_km - typicalPickupKm(bizRows, BIZ_S);
+  assert.ok(w.surplus - extra * pickupCostPerKm(BIZ_S) >= 0, "радіус задирає подачу понад окупність");
+  // Форма Uklon: Простий, лише місто.
+  assert.equal(sl.city_only, true);
+  assert.equal(sl.km_in_min, 1);
+});
+
+test("Бізнес: без мін. вартості радіус падає — саме вона його купує", () => {
+  const withMin = bizSlot(bizRows, BIZ_S)!;
+  const noMin = bizSlot(bizRows, { ...BIZ_S, biz_slot: { price_km: 50, min_order: 80 } });
+  assert.ok(!noMin || noMin.max_pickup_km < withMin.max_pickup_km);
+});
+
+test("Бізнес: дорожче пальне — менший радіус", () => {
+  const cheap = bizSlot(bizRows, BIZ_S)!;
+  const pricey = bizSlot(bizRows, { ...BIZ_S, gas_price_per_l: 130 })!;
+  assert.ok(pricey.max_pickup_km <= cheap.max_pickup_km);
+});
+
+test("Бізнес іде третім щаблем драбини, ширшим за підібрані", () => {
+  const trips: Trip[] = [];
+  for (let d = 0; d < 6; d++) {
+    for (let i = 0; i < 12; i++) {
+      const dist = 2 + ((i * 7) % 11);
+      trips.push(
+        trip({
+          datetime: `2026-08-${String(10 + d).padStart(2, "0")} ${String(17 + Math.floor(i / 3)).padStart(2, "0")}:${String((i * 13) % 60).padStart(2, "0")}`,
+          amount: Math.round(80 + dist * (18 + (i % 5) * 3)),
+          distance: dist,
+        }),
+      );
+    }
+  }
+  const rows = trips.map((t) => ({ ...t, ...compute(t, BIZ_S) }));
+  const slots = deriveSlots(rows, BIZ_S);
+  const biz = slots.find((x) => x.id === "biz");
+  assert.ok(biz, "слот Бізнес у наборі");
+  assert.equal(slots[slots.length - 1].id, "biz", "Бізнес — останній щабель");
+  for (const o of slots.filter((x) => x.id !== "biz")) assert.ok(biz!.max_pickup_km > o.max_pickup_km);
 });
