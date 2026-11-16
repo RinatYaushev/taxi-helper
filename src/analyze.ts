@@ -31,7 +31,7 @@ const km = data.trips.reduce((a, t) => a + t.distance, 0);
 const gas = data.trips.reduce((a, t) => a + compute(t, s).gas, 0);
 console.log("-".repeat(64));
 console.log(
-  `Разом: ${amt} грн, ${km.toFixed(1)} км, газ ${gas.toFixed(0)} грн ` +
+  `Разом: ${amt} грн, ${km.toFixed(1)} км, паливо ${gas.toFixed(0)} грн ` +
     `(${((gas / amt) * 100).toFixed(0)}% виручки) | вал.грн/км=${(amt / km).toFixed(1)}`,
 );
 

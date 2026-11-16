@@ -163,7 +163,7 @@ export function commissionOf(t: Trip, s: Settings): number {
   return base + (balanceAmount(t, s) * s.commission_cashless_pct) / 100;
 }
 
-/** Порахувати газ, комісію, чистий, грн/км і рекомендацію для однієї поїздки */
+/** Порахувати паливо, комісію, чистий, грн/км і рекомендацію для однієї поїздки */
 export function compute(t: Trip, s: Settings): Computed {
   const amount = Number(t.amount);
   const dist = Number(t.distance);

@@ -25,7 +25,7 @@ export function kpiCards(rows: Row[], s: Settings): string {
     ["Виручка", money(amount), "грн", ""],
     ["Чистий прибуток", money(net), "грн", ""],
     ["Чистий / км", f1(km ? net / km : 0), "грн/км", ""],
-    ["Газ", f1(amount ? (gas / amount) * 100 : 0), "% виручки", ""],
+    ["Паливо", f1(amount ? (gas / amount) * 100 : 0), "% виручки", ""],
     ["Комісія", f1(amount ? (comm / amount) * 100 : 0), "% виручки", ""],
   ];
   const plain = cards
