@@ -412,9 +412,9 @@ test("Бізнес: радіус окупається навіть для НАЙ
   const sl = bizSlot(bizRows, BIZ_S)!;
   assert.ok(sl, "слот є");
   const w = sl.worstCase!;
-  // Найгірше — коли сума впирається в мін. вартість: d = 250 / 50 = 5 км.
-  assert.equal(w.amount, 250);
-  assert.ok(Math.abs(w.distance - 5) < 0.11);
+  // Найгірше — коли сума впирається в мін. вартість: d = 300 / 42 ≈ 7.1 км.
+  assert.equal(w.amount, 300);
+  assert.ok(Math.abs(w.distance - 300 / 42) < 0.11);
   // Подача до радіуса не з'їдає надлишок найгіршого замовлення.
   const extra = sl.max_pickup_km - typicalPickupKm(bizRows, BIZ_S);
   assert.ok(w.surplus - extra * pickupCostPerKm(BIZ_S) >= 0, "радіус задирає подачу понад окупність");
