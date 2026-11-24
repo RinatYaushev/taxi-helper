@@ -1,7 +1,7 @@
 // Складання HTML-звіту з панелей.
 import type { Data } from "../types.ts";
 import type { Snapshot } from "../lib.ts";
-import { baseTargetPh, deriveSlots, enrich, marginalTargetPh } from "../lib.ts";
+import { baseTargetPh, deriveSlots, efirFilter, enrich, marginalTargetPh } from "../lib.ts";
 import { STYLES } from "./styles.ts";
 import { CLIENT_JS } from "./client.ts";
 import { esc } from "./format.ts";
@@ -17,7 +17,8 @@ export function render(data: Data, prev: Snapshot | null, cur: Snapshot): string
   const slots = deriveSlots(rows, s);
   const now = new Date().toLocaleString("uk-UA");
   // Дані слотів для клієнтського прев'ю (підсвітка pass/fail у таблиці).
-  const slotsJson = JSON.stringify(slots).replace(/</g, "\\u003c");
+  // Ефір-фільтр — лише для прев'ю: він не автослот і в бектест не входить.
+  const slotsJson = JSON.stringify([...slots, efirFilter(rows, s)]).replace(/</g, "\\u003c");
 
   return `<!doctype html>
 <html lang="uk">

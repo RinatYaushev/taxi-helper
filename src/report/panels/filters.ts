@@ -8,15 +8,22 @@ import type { Row, Settings, Slot } from "../../types.ts";
 import {
   baseTargetPh,
   deriveSlots,
+  efirFilter,
   goldenRule,
   npkOf,
   phOf,
+  pickupCostPerKm,
   refillBreakeven,
   shiftStats,
   slotPass,
   slotsStats,
+  typicalPickupKm,
 } from "../../lib.ts";
 import { esc, f1, money } from "../format.ts";
+
+const sec = (t: string): string => `<tr class="fx-sec"><td colspan="2">${esc(t)}</td></tr>`;
+const row = (k: string, v: string, dim = false): string =>
+  `<tr${dim ? ' class="fx-dim"' : ""}><td>${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`;
 
 /** Числівник для тексту інструкції: «два фільтри», «три фільтри». */
 const numWord = (n: number): string => ({ 1: "один", 2: "два", 3: "три", 4: "чотири" } as Record<number, string>)[n] ?? String(n);
@@ -75,9 +82,6 @@ function bizNote(sl: Slot, T: number): string {
 
 /** Картка слота — дзеркало форми фільтра в застосунку Uklon. */
 function slotFields(sl: Slot): string {
-  const sec = (t: string): string => `<tr class="fx-sec"><td colspan="2">${esc(t)}</td></tr>`;
-  const row = (k: string, v: string, dim = false): string =>
-    `<tr${dim ? ' class="fx-dim"' : ""}><td>${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`;
   const sub = sl.price_km_suburb;
   // ⚠️ «Простий» і «Складний» — взаємовиключні вкладки. Тумблер «Лише по місту»
   // існує ТІЛЬКИ у Простому, а «Км у мінімалці» + ціна передмістя — ТІЛЬКИ у
@@ -109,6 +113,81 @@ function slotFields(sl: Slot): string {
     ${sec("Тип оплати")}
     ${row("Способи оплати", "усі")}
   </table>`;
+}
+
+/**
+ * Фільтр «лише на Ефір» — нічого не бере, тільки чистить стрічку (`efirFilter`).
+ * Перевірка — на поїздках, взятих водієм вручну з Ефіру: саме їх фільтр не має
+ * ховати, якщо вони були вигідні.
+ */
+function efirSection(rows: Row[], s: Settings): string {
+  const f = efirFilter(rows, s);
+  const T = Math.round(baseTargetPh(s));
+  const manual = rows.filter((r) => r.source === "Ефір");
+  const shown = manual.filter((r) => slotPass(r, f));
+  const hidden = manual.filter((r) => !slotPass(r, f));
+  const good = (rs: Row[]): number => rs.filter((r) => r.netPerHour >= T).length;
+  const lostGood = good(hidden);
+  const over = manual.filter((r) => (r.pickup_km ?? 0) > 3).length;
+  const check = manual.length
+    ? `<div class="fx-bt">
+        <div class="fx-bt-row"><span>Твої ручні взяття з Ефіру</span><b>${manual.length}</b></div>
+        <div class="fx-bt-row"><span>Лишились би в стрічці · ₴/год</span>
+          <b>${shown.length} · ${Math.round(phOf(shown))}</b></div>
+        <div class="fx-bt-row"><span>Сховав би · ₴/год</span>
+          <b>${hidden.length} · ${hidden.length ? Math.round(phOf(hidden)) : "—"}</b></div>
+        <div class="fx-bt-row"><span>Сховав би вигідних (≥ ${T} ₴/год)</span>
+          <b class="${lostGood ? "v-low" : "v-ok"}">${lostGood} з ${good(manual)}</b></div>
+      </div>`
+    : `<div class="fx-stab">Ручних взять з Ефіру в базі ще немає — перевірити нема на чому.</div>`;
+  const card = `
+    <div class="fx-card">
+      <div class="fx-title">${f.icon} ${esc(f.name)}
+        <span class="fx-badge">лише Ефір</span></div>
+      <div class="fx-sub">${esc(f.role)}</div>
+      <div class="fx-group-title">⚙️ Поля фільтра — переписати як є</div>
+      <table class="fx-fields fx-fields-last">
+        ${row("Назва фільтра", f.name)}
+        ${row("Увімкнути кнопкою", "Ефір (не Авто й не Цикл)")}
+        ${sec("Звідки")}
+        ${row("Відстань", `${f.max_pickup_km} км`)}
+        ${row("Сектори", "усі (не обмежувати)")}
+        ${sec("Куди")}
+        ${row("Сектори", "усі (не обмежувати)")}
+        ${sec("Тариф")}
+        ${row("Тип тарифу", "Простий")}
+        ${row("Мін. вартість", "— (порожньо)", true)}
+        ${row("Лише по місту", "✅ увімк.")}
+        ${row("Мін. ціна ₴/км", `${f.price_km} ₴`)}
+        ${sec("Тип оплати")}
+        ${row("Способи оплати", "усі")}
+      </table>
+      ${check}
+      <button class="fx-preview" data-slot="${esc(f.id)}">🔎 Показати на історії</button>
+    </div>`;
+  const how = `
+    <div class="fx-card">
+      <div class="fx-title">Чому саме так</div>
+      <ul class="fx-howto-list">
+        <li><b>Нічого не бере.</b> Режим Ефір лише фільтрує стрічку — рішення за тобою,
+          тож подачу оцінюєш сам: кожен км понад звичні ~${f1(typicalPickupKm(rows, s))} коштує
+          ~${Math.round(pickupCostPerKm(s))} ₴ (пальне + час за ціллю).</li>
+        <li><b>${f.price_km} ₴/км</b> — золоте правило міста (${f1(goldenRule(s).city)}), округлене вгору:
+          дешевше — збиток навіть із короткою подачею. Ховає довгі дешеві поїздки.</li>
+        <li><b>Мін. вартість порожня.</b> Мінімалка Uklon ~79 ₴ і так її виконує, а з одним
+          полем зникає питання, як Простий поєднує дві умови («І» чи «АБО»).</li>
+        <li><b>Відстань ${f.max_pickup_km} км, а не 3.</b> За описом Uklon Ефір показує 3 км, але
+          ${over ? `у ${over} з ${manual.length} твоїх ручних взять подача була більша` : "фактичний радіус ширший"}.
+          Менший радіус сховав би саме те, що ти береш.</li>
+        <li><b>Лише по місту</b> — у тупик за ${f.price_km} ₴/км збиток (потрібно від
+          ${f1(goldenRule(s).dead)}), а ціни передмістя в Простому немає.</li>
+        <li>⚠️ <b>У глухому куті — вимкни.</b> Там виїзд доводиться брати й по 25–27 ₴/км,
+          а фільтр їх сховає.</li>
+      </ul>
+    </div>`;
+  return `
+    <div class="fx-switch-title">📺 Ефір — прибрати сміття зі стрічки</div>
+    <div class="grid2 fx-grid">${card}${how}</div>`;
 }
 
 /**
@@ -220,8 +299,9 @@ function deadEndEscapeNote(): string {
         поточної позиції. Це завжди буде ручне рішення в моменті, а не
         налаштування, яке можна забути.</p>
       <ol class="fx-howto-list">
-        <li><b>Ефір.</b> Перевір стрічку вручну — вона не прив'язана до
-          фільтра, і саме туди Uklon підкидає «додаткові» замовлення під час
+        <li><b>Ефір.</b> Перевір стрічку вручну, але спершу <b>вимкни фільтр
+          «Ефір: без сміття»</b>: виїзд звідси часто дешевший за золоте правило, і
+          фільтр його сховає. Саме сюди Uklon підкидає «додаткові» замовлення під час
           простою.</li>
         <li><b>Ланцюжком.</b> Не чекай одну поїздку, що одразу вивезе в
           місто — бери короткі проміжні в потрібному напрямку одну за одною.</li>
@@ -408,6 +488,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
 
       <div class="grid2 fx-grid">${cards}</div>
       ${disabledSlotNote(rows, s, slots)}
+      ${efirSection(rows, s)}
       ${sectorsNote(rows, s, slots)}
       ${deadEndEscapeNote()}
 

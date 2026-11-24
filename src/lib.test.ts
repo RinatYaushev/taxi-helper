@@ -13,6 +13,7 @@ import {
   compute,
   cycleMinutes,
   deriveSlots,
+  efirFilter,
   goldenRule,
   inArea,
   minGrossPerKmZone,
@@ -477,4 +478,25 @@ test("std_slots = 1: лише Впритул (+ Бізнес), Впритул н
   assert.ok(two.some((x) => x.id === "mid"), "передумова: за замовчуванням Робочий є");
   assert.deepEqual(one.map((x) => x.id), ["close", "biz"]);
   assert.deepEqual(one[0], two[0], "вимкнення Робочого не чіпає Впритул");
+});
+
+test("Ефір-фільтр: лише прибирає — не ховає радіусом того, що водій брав з Ефіру, і не є автослотом", () => {
+  const efirTrips = [
+    trip({ source: "Ефір", pickup_km: 5.24, distance: 5.73, amount: 200 }),
+    trip({ source: "Ефір", pickup_km: 3.1, distance: 3.9, amount: 150 }),
+    trip({ pickup_km: 9, distance: 3, amount: 120 }), // не Ефір — радіус не розширює
+  ];
+  const rows = efirTrips.map((t) => ({ ...t, ...compute(t, S) }));
+  const f = efirFilter(rows, S);
+  assert.equal(f.max_pickup_km, 5.5, "радіус ≥ найдальшої ручної подачі з Ефіру, округлено вгору до 0.5");
+  assert.equal(efirFilter([], S).max_pickup_km, 3, "без даних — радіус Ефіру за описом Uklon");
+  assert.equal(f.price_km, Math.ceil(goldenRule(S).city), "₴/км — золоте правило міста вгору");
+  assert.equal(f.min_order, 0, "мін. вартість порожня");
+  assert.equal(f.city_only, true);
+  // Дешевша за золоте правило поїздка ховається, дорожча — ні.
+  const cheap = { ...trip({ distance: 10, amount: Math.floor(goldenRule(S).city * 10) - 5 }) };
+  const ok = { ...trip({ distance: 4, amount: Math.ceil(f.price_km * 4) }) };
+  assert.equal(slotPass({ ...cheap, ...compute(cheap, S) }, f), false);
+  assert.equal(slotPass({ ...ok, ...compute(ok, S) }, f), true);
+  assert.ok(!deriveSlots(rows, S).some((x) => x.id === "efir"), "Ефір-фільтр не входить в автослоти");
 });
