@@ -1,5 +1,6 @@
 {
   "settings": {
+    "std_slots": 1,
     "gas_consumption_l_100km": 11,
     "gas_price_per_l": 87.9,
     "empty_run_coef": 0.5,

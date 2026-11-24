@@ -66,6 +66,8 @@ export function validateData(data: Data): Issue[] {
     cfg.push("combined_balance_share поза 0..1");
   if (s?.biz_slot && (!isNum(s.biz_slot.price_km) || s.biz_slot.price_km <= 0 || !isNum(s.biz_slot.min_order) || s.biz_slot.min_order <= 0))
     cfg.push("biz_slot: price_km і min_order мають бути додатними числами");
+  if (s?.std_slots != null && s.std_slots !== 1 && s.std_slots !== 2)
+    cfg.push("std_slots: лише 1 або 2");
   add("err", "Налаштування", cfg);
 
   // ── trips ──────────────────────────────────────────────────────────

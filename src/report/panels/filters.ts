@@ -21,6 +21,28 @@ import { esc, f1, money } from "../format.ts";
 /** Числівник для тексту інструкції: «два фільтри», «три фільтри». */
 const numWord = (n: number): string => ({ 1: "один", 2: "два", 3: "три", 4: "чотири" } as Record<number, string>)[n] ?? String(n);
 
+/** Що дав би вимкнений Робочий (`settings.std_slots = 1`) — щоб рішення можна було переглянути. */
+function disabledSlotNote(rows: Row[], s: Settings, slots: Slot[]): string {
+  if ((s.std_slots ?? 2) >= 2) return "";
+  const extra = deriveSlots(rows, { ...s, std_slots: 2 }).find((x) => x.id === "mid");
+  if (!extra) return "";
+  const T = baseTargetPh(s);
+  const gain = rows.filter((r) => slotPass(r, extra) && !slots.some((o) => slotPass(r, o)));
+  const add = Math.round(gain.reduce((a, r) => a + r.net - (T * r.timeMin) / 60, 0));
+  const known = rows.filter((r) => r.pickup_km != null).length;
+  const fields = extra.city_only
+    ? `Простий, ${extra.price_km} ₴/км`
+    : `Складний, ${extra.price_km} ₴/км, км у мінімалці ${extra.km_in_min}, передмістя ${extra.price_km_suburb} ₴/км`;
+  return `
+    <div class="fx-note">
+      ${extra.icon} <b>${esc(extra.name)} вимкнено</b> (<code>settings.std_slots = 1</code>).
+      На історії він додав би лише <b>${gain.length}</b> замовл. (<b>${add >= 0 ? "+" : ""}${add} ₴</b>
+      понад ціль ${T} ₴/год) — поля були б: ${esc(fields)}, подача ≤ ${extra.max_pickup_km} км.
+      Подачу заміряно в ${known} із ${rows.length} поїздок, тож оцінка занижена; якщо журнал
+      покаже більше — повернути <code>std_slots: 2</code>.
+    </div>`;
+}
+
 /** Звідки в слота «Бізнес» радіус — він не підібраний, а розрахований. */
 function bizNote(sl: Slot, T: number): string {
   const w = sl.worstCase;
@@ -371,6 +393,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
       </div>
 
       <div class="grid2 fx-grid">${cards}</div>
+      ${disabledSlotNote(rows, s, slots)}
       ${sectorsNote(rows, s, slots)}
       ${deadEndEscapeNote()}
 
@@ -379,7 +402,7 @@ export function filtersSection(rows: Row[], s: Settings, slots: Slot[]): string 
         Слоти — це <b>драбина за подачею</b>, а не різні «настрої».
         Кожен наступний <b>строгіший за ціною, але дозволяє їхати далі</b> по клієнта.
         Поточна розкладка: <b>${esc(ladder)}</b>.
-        ${withPickup < 20
+        ${withPickup < 20 && slots.filter((x) => x.id !== "biz").length >= 2
           ? `<br><br>⚠️ Рядок <b>«тільки цей слот»</b> для другого показує мало —
              і це <b>очікувано</b>: подача заповнена в <b>${withPickup} із ${rows.length}</b>
              поїздок, тож перевірка радіуса пропускається, і слоти виглядають вкладеними

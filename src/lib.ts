@@ -627,8 +627,11 @@ export function deriveSlots(allRows: Row[], s: Settings): Slot[] {
   }
 
   // Щабель 2 — найкращий серед тих, хто заробив помітно ширший радіус.
+  // `std_slots = 1` — рішення водія (24.11.2026): на 11 л/100 км Робочий
+  // дублював Впритул (та сама ціна 33, ексклюзивно 2 замовлення з 248).
   const STEP = 0.5;
-  while (chosen.length < 2) {
+  const want = s.std_slots ?? 2;
+  while (chosen.length < want) {
     const need = chosen[chosen.length - 1].pickup + STEP;
     const allowed = cands.map((_, i) => i).filter((i) => radii[i] >= need);
     if (!allowed.length) break; // ширший радіус ніхто не заробляє — чесніше віддати слот

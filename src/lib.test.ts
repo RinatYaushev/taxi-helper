@@ -456,3 +456,25 @@ test("Бізнес іде третім щаблем драбини, ширшим
   assert.equal(slots[slots.length - 1].id, "biz", "Бізнес — останній щабель");
   for (const o of slots.filter((x) => x.id !== "biz")) assert.ok(biz!.max_pickup_km > o.max_pickup_km);
 });
+
+test("std_slots = 1: лише Впритул (+ Бізнес), Впритул не змінюється", () => {
+  const trips: Trip[] = [];
+  for (let d = 0; d < 6; d++) {
+    for (let i = 0; i < 12; i++) {
+      const dist = 2 + ((i * 7) % 11);
+      trips.push(
+        trip({
+          datetime: `2026-08-${String(10 + d).padStart(2, "0")} ${String(17 + Math.floor(i / 3)).padStart(2, "0")}:${String((i * 13) % 60).padStart(2, "0")}`,
+          amount: Math.round(80 + dist * (18 + (i % 5) * 3)),
+          distance: dist,
+        }),
+      );
+    }
+  }
+  const rows = trips.map((t) => ({ ...t, ...compute(t, BIZ_S) }));
+  const two = deriveSlots(rows, BIZ_S);
+  const one = deriveSlots(rows, { ...BIZ_S, std_slots: 1 });
+  assert.ok(two.some((x) => x.id === "mid"), "передумова: за замовчуванням Робочий є");
+  assert.deepEqual(one.map((x) => x.id), ["close", "biz"]);
+  assert.deepEqual(one[0], two[0], "вимкнення Робочого не чіпає Впритул");
+});
