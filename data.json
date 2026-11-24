@@ -1,7 +1,7 @@
 {
   "settings": {
-    "gas_consumption_l_100km": 9,
-    "gas_price_per_l": 90.9,
+    "gas_consumption_l_100km": 11,
+    "gas_price_per_l": 87.9,
     "empty_run_coef": 0.5,
     "empty_run_by_zone": {
       "Місто": 0.3,
@@ -11,7 +11,7 @@
     "commission_cashless_pct": 2,
     "threshold_net_per_km": 14,
     "marginal_net_per_km": 10,
-    "target_net_per_hour": 240,
+    "target_net_per_hour": 220,
     "biz_slot": {
       "price_km": 50,
       "min_order": 250
